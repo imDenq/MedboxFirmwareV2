@@ -45,7 +45,6 @@ MedboxFirmware/
 │   ├── ca.crt
 │   ├── client.crt
 │   └── client.key
-├── build.bat                # Raccourci build
 ├── menuconfig.bat           # Raccourci configuration
 ├── partitions.csv           # Table de partitions
 ├── sdkconfig.defaults       # Configuration par défaut
@@ -81,7 +80,7 @@ Dans `Medbox Configuration > WiFi Configuration`:
 
 ```batch
 :: Build du firmware (signe automatiquement avec la clé)
-build.bat
+idf.py build
 ```
 
 ### 4. Setup d'un nouvel ESP32 (une seule fois)
@@ -114,7 +113,7 @@ idf.py -p COM5 monitor
 
 | Action | Commande |
 |--------|----------|
-| Build | `idf.py build` ou `build.bat` |
+| Build | `idf.py build` |
 | Configuration | `idf.py menuconfig` ou `menuconfig.bat` |
 | Flash chiffré | `python scripts/encrypted_flash.py COM5` |
 | Flash + Build | `scripts\flash.bat COM5` |
