@@ -19,6 +19,7 @@ Les codes d'erreur suivent le format `0xCCNN` :
 | 0x04xx | NVS | Erreurs stockage |
 | 0x05xx | SEC | Erreurs securite |
 | 0x06xx | APP | Erreurs metier |
+| 0x07xx | HTTP | Erreurs serveur web |
 
 ---
 
@@ -123,6 +124,21 @@ Les codes d'erreur suivent le format `0xCCNN` :
 | 0x0630 | MEDBOX_ERR_SENSOR_FAILED | Echec du capteur | Capteur deconnecte ou defaillant |
 | 0x0640 | MEDBOX_ERR_BATTERY_LOW | Batterie faible | Niveau < 20% |
 | 0x0641 | MEDBOX_ERR_BATTERY_CRITICAL | Batterie critique | Niveau < 5%, arret imminent |
+
+---
+
+## 0x07xx - Erreurs Serveur Web/HTTP
+
+| Code | Nom | Message | Cause probable |
+|------|-----|---------|----------------|
+| 0x0701 | MEDBOX_ERR_HTTP_INIT_FAILED | Echec d'initialisation du serveur HTTP | Memoire insuffisante ou config invalide |
+| 0x0702 | MEDBOX_ERR_HTTP_START_FAILED | Echec de demarrage du serveur HTTP | Port deja utilise ou erreur systeme |
+| 0x0703 | MEDBOX_ERR_HTTP_HANDLER_FAILED | Echec d'enregistrement du handler HTTP | Trop de handlers ou memoire insuffisante |
+| 0x0704 | MEDBOX_ERR_HTTP_RESPONSE_FAILED | Echec d'envoi de la reponse HTTP | Client deconnecte ou buffer plein |
+| 0x0705 | MEDBOX_ERR_HTTP_INVALID_REQUEST | Requete HTTP invalide | Methode non supportee ou URL invalide |
+| 0x0706 | MEDBOX_ERR_HTTP_JSON_PARSE_ERROR | Echec de parsing JSON | JSON mal forme dans la requete |
+| 0x0707 | MEDBOX_ERR_HTTP_JSON_CREATE_ERROR | Echec de creation JSON | Memoire insuffisante pour creer JSON |
+| 0x0708 | MEDBOX_ERR_HTTP_BUFFER_OVERFLOW | Depassement de buffer HTTP | Requete trop grande |
 
 ---
 

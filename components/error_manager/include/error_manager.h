@@ -32,6 +32,7 @@ extern "C" {
  * - 0x04xx : Stockage/NVS
  * - 0x05xx : Securite (certificats, cles)
  * - 0x06xx : Metier (commandes, roue, etc.)
+ * - 0x07xx : Serveur Web/HTTP
  */
 typedef enum {
     // ========================================
@@ -117,6 +118,18 @@ typedef enum {
     MEDBOX_ERR_BATTERY_LOW                  = 0x0640,
     MEDBOX_ERR_BATTERY_CRITICAL             = 0x0641,
 
+    // ========================================
+    // 0x07xx - Erreurs Serveur Web/HTTP
+    // ========================================
+    MEDBOX_ERR_HTTP_INIT_FAILED             = 0x0701,
+    MEDBOX_ERR_HTTP_START_FAILED            = 0x0702,
+    MEDBOX_ERR_HTTP_HANDLER_FAILED          = 0x0703,
+    MEDBOX_ERR_HTTP_RESPONSE_FAILED         = 0x0704,
+    MEDBOX_ERR_HTTP_INVALID_REQUEST         = 0x0705,
+    MEDBOX_ERR_HTTP_JSON_PARSE_ERROR        = 0x0706,
+    MEDBOX_ERR_HTTP_JSON_CREATE_ERROR       = 0x0707,
+    MEDBOX_ERR_HTTP_BUFFER_OVERFLOW         = 0x0708,
+
 } medbox_err_t;
 
 /**
@@ -127,6 +140,18 @@ typedef struct {
     const char *message;        // Message en francais
     const char *category;       // Categorie (SYS, WIFI, MQTT, etc.)
 } medbox_error_info_t;
+
+/**
+ * @brief Entree dans l'historique des erreurs
+ */
+typedef struct {
+    medbox_err_t code;          // Code d'erreur
+    uint32_t timestamp;         // Timestamp en secondes depuis boot
+    char context[32];           // Contexte additionnel
+} medbox_error_history_entry_t;
+
+// Taille de l'historique des erreurs
+#define ERROR_HISTORY_SIZE 20
 
 // ============================================
 // API Publique
@@ -182,6 +207,29 @@ void medbox_log_warn(const char *tag, const char *format, ...);
  * @return Code d'erreur Medbox correspondant
  */
 medbox_err_t medbox_err_from_esp(esp_err_t esp_err, uint8_t category);
+
+/**
+ * @brief Obtient l'historique des erreurs
+ * @param entries Buffer pour stocker les entrees
+ * @param max_entries Taille max du buffer
+ * @param num_entries Nombre d'entrees retournees
+ * @return MEDBOX_OK en cas de succes
+ */
+medbox_err_t error_manager_get_history(medbox_error_history_entry_t *entries,
+                                       uint16_t max_entries,
+                                       uint16_t *num_entries);
+
+/**
+ * @brief Efface l'historique des erreurs
+ * @return MEDBOX_OK en cas de succes
+ */
+medbox_err_t error_manager_clear_history(void);
+
+/**
+ * @brief Obtient le nombre d'erreurs dans l'historique
+ * @return Nombre d'erreurs
+ */
+uint16_t error_manager_get_history_count(void);
 
 /**
  * @brief Macro pour verifier et logger une erreur

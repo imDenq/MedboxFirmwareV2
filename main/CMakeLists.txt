@@ -8,4 +8,5 @@ idf_component_register(
         secure_storage
         wifi_manager
         mqtt_client
+        web_server
 )

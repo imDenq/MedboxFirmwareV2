@@ -5,27 +5,33 @@
 Le firmware Medbox est une application ESP32 basée sur ESP-IDF v5.5.1 qui communique avec un broker MQTT (EMQX) via TLS pour le contrôle et la télémétrie d'une Medbox.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         ESP32 Medbox                            │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │   WiFi      │  │    MQTT     │  │    Application          │  │
-│  │  Manager    │──│   Client    │──│    (main_task)          │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
-│         │               │                     │                 │
-│         └───────────────┴─────────────────────┘                 │
-│                         │                                       │
-│              ┌──────────┴──────────┐                            │
-│              │   Secure Storage    │                            │
-│              │       (NVS)         │                            │
-│              └─────────────────────┘                            │
-└─────────────────────────────────────────────────────────────────┘
-                          │
-                          │ MQTT over TLS (port 8883)
-                          ▼
-              ┌─────────────────────┐
-              │    Broker EMQX      │
-              │  185.157.245.46     │
-              └─────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                           ESP32 Medbox                               │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────────┐  │
+│  │   WiFi      │  │    MQTT     │  │       Application           │  │
+│  │  Manager    │──│   Client    │──│       (main_task)           │  │
+│  │  (STA+AP)   │  └─────────────┘  └─────────────────────────────┘  │
+│  └─────────────┘        │                       │                   │
+│         │               │                       │                   │
+│         │         ┌─────┴─────┐         ┌───────┴───────┐           │
+│         │         │  Error    │         │  Web Server   │           │
+│         │         │  Manager  │         │  (HTTP:80)    │           │
+│         │         └───────────┘         └───────────────┘           │
+│         │               │                       │                   │
+│         └───────────────┴───────────────────────┘                   │
+│                         │                                           │
+│              ┌──────────┴──────────┐                                │
+│              │   Secure Storage    │                                │
+│              │       (NVS)         │                                │
+│              └─────────────────────┘                                │
+└─────────────────────────────────────────────────────────────────────┘
+          │                                    │
+          │ MQTT over TLS (port 8883)          │ HTTP (port 80)
+          ▼                                    ▼
+┌─────────────────────┐              ┌─────────────────────┐
+│    Broker EMQX      │              │  Interface Web      │
+│  185.157.245.46     │              │  (Configuration)    │
+└─────────────────────┘              └─────────────────────┘
 ```
 
 ---
@@ -53,7 +59,9 @@ MedboxFirmware/
 │   └── Kconfig.projbuild      # Options de configuration menuconfig
 ├── components/                # Composants réutilisables
 │   ├── mqtt_client/           # Client MQTT avec TLS/mTLS
-│   ├── wifi_manager/          # Gestion WiFi avec reconnexion auto
+│   ├── wifi_manager/          # Gestion WiFi STA+AP avec reconnexion auto
+│   ├── web_server/            # Serveur HTTP pour interface de configuration
+│   ├── error_manager/         # Gestionnaire d'erreurs centralise
 │   └── secure_storage/        # Stockage NVS sécurisé
 ├── scripts/                   # Scripts de sécurité ESP32
 │   ├── check_esp32.py         # Vérifier l'état sécurité d'un ESP32
@@ -117,7 +125,13 @@ bool secure_storage_certs_provisioned(void);
 
 ### 2. WiFi Manager (`components/wifi_manager/`)
 
-**Rôle**: Gestion de la connexion WiFi avec reconnexion automatique.
+**Rôle**: Gestion de la connexion WiFi (STA) et point d'accès (AP) avec reconnexion automatique.
+
+**Mode AP+STA**:
+- **STA (Station)**: Connexion au réseau WiFi configuré
+- **AP (Access Point)**: Point d'accès `Medbox-XXXX` pour la configuration
+- L'AP s'active uniquement quand le WiFi STA est déconnecté
+- L'AP se désactive automatiquement quand le WiFi STA se connecte
 
 **États WiFi**:
 ```
@@ -125,8 +139,9 @@ DISCONNECTED ──▶ CONNECTING ──▶ CONNECTED
       ▲               │              │
       │               ▼              │
       │           FAILED ◀───────────┘
-      │               │         (après 10 tentatives)
+      │               │
       └───────────────┘
+      (AP actif)         (AP inactif)
 ```
 
 **API principale**:
@@ -136,14 +151,22 @@ esp_err_t wifi_manager_init(void);
 esp_err_t wifi_manager_connect(const char *ssid, const char *password);
 esp_err_t wifi_manager_disconnect(void);
 
-// État
+// État STA
 bool wifi_manager_is_connected(void);
 wifi_state_t wifi_manager_get_state(void);
 esp_err_t wifi_manager_wait_connected(uint32_t timeout_ms);
-
-// Informations
 esp_err_t wifi_manager_get_ip(char *ip_str);
 int8_t wifi_manager_get_rssi(void);
+
+// Mode AP (Access Point)
+esp_err_t wifi_manager_start_ap(const char *uuid_suffix);
+esp_err_t wifi_manager_stop_ap(void);
+bool wifi_manager_is_ap_active(void);
+esp_err_t wifi_manager_get_ap_ip(char *ip_str);
+esp_err_t wifi_manager_get_ap_ssid(char *ssid_str);
+
+// Scan WiFi
+esp_err_t wifi_manager_scan(wifi_scan_result_t *results, uint16_t max, uint16_t *num);
 
 // Callback
 void wifi_manager_set_callback(wifi_event_callback_t callback);
@@ -190,6 +213,82 @@ mqtt_client_state_t mqtt_client_medbox_get_state(void);
 
 ---
 
+### 4. Web Server (`components/web_server/`)
+
+**Rôle**: Interface web de configuration et monitoring accessible via HTTP.
+
+**Architecture**:
+```
+components/web_server/
+├── include/
+│   └── web_server.h       # API publique
+├── web_server.c           # Serveur HTTP principal
+├── web_pages.c            # Pages HTML/CSS/JS embarquées
+├── web_api.c              # REST API JSON
+└── CMakeLists.txt
+```
+
+**Pages Web**:
+| Page | URL | Description |
+|------|-----|-------------|
+| Status | `/` | Uptime, WiFi RSSI, version firmware, UUID |
+| WiFi Config | `/wifi` | Scanner réseaux, configurer SSID/password |
+| Erreurs | `/errors` | Historique des 20 dernières erreurs |
+
+**REST API**:
+| Endpoint | Méthode | Description |
+|----------|---------|-------------|
+| `/api/status` | GET | Informations système (JSON) |
+| `/api/wifi/scan` | GET | Liste réseaux WiFi disponibles |
+| `/api/wifi/config` | GET | Configuration WiFi actuelle |
+| `/api/wifi/config` | POST | Configurer nouveau WiFi |
+| `/api/errors` | GET | Liste erreurs récentes |
+
+**API principale**:
+```c
+esp_err_t web_server_start(void);
+esp_err_t web_server_stop(void);
+bool web_server_is_running(void);
+```
+
+**Accès**:
+- Via AP: `http://192.168.4.1`
+- Via STA: `http://<IP_attribuée>`
+
+---
+
+### 5. Error Manager (`components/error_manager/`)
+
+**Rôle**: Gestion centralisée des erreurs avec codes hexadécimaux et historique.
+
+**Format des codes**: `0xCCNN`
+- CC = Catégorie (01=SYS, 02=WIFI, 03=MQTT, 04=NVS, 05=SEC, 06=APP, 07=HTTP)
+- NN = Numéro d'erreur
+
+**Historique**: Buffer circulaire de 20 erreurs avec timestamp.
+
+**API principale**:
+```c
+// Initialisation
+medbox_err_t error_manager_init(void);
+
+// Logging
+void medbox_log_error(medbox_err_t err, const char *tag, const char *context);
+
+// Conversion
+const char* medbox_err_to_str(medbox_err_t err);
+const char* medbox_err_get_category(medbox_err_t err);
+
+// Historique
+medbox_err_t error_manager_get_history(medbox_error_history_entry_t *entries,
+                                       uint16_t max_entries, uint16_t *num_entries);
+medbox_err_t error_manager_clear_history(void);
+```
+
+Voir [ERRORS.md](ERRORS.md) pour la liste complète des codes.
+
+---
+
 ## Application Principale (`main/main.c`)
 
 ### Architecture FreeRTOS
@@ -197,32 +296,33 @@ mqtt_client_state_t mqtt_client_medbox_get_state(void);
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        app_main()                           │
-│  1. Initialise secure_storage                               │
+│  1. Initialise secure_storage + error_manager               │
 │  2. Charge UUID (dev ou NVS)                                │
 │  3. Initialise wifi_manager                                 │
-│  4. Connecte au WiFi                                        │
-│  5. Crée les tâches FreeRTOS                                │
+│  4. Connecte au WiFi (timeout 30s)                          │
+│  5. Si WiFi OK: continue / Si echec: demarre AP             │
+│  6. Demarre web_server (HTTP:80)                            │
+│  7. Crée les tâches FreeRTOS                                │
 └─────────────────────────────────────────────────────────────┘
                     │
-         ┌─────────┴─────────┐
-         ▼                   ▼
-┌─────────────────┐  ┌─────────────────┐
-│   mqtt_task     │  │   main_task     │
-│   Priorité: 5   │  │   Priorité: 4   │
-│   Stack: 8KB    │  │   Stack: 4KB    │
-├─────────────────┤  ├─────────────────┤
-│ - Init MQTT     │  │ - Traite les    │
-│ - Gère connexion│  │   messages MQTT │
-│ - Reconnexion   │  │ - Envoie        │
-│   automatique   │  │   télémétrie    │
-└─────────────────┘  └─────────────────┘
-         │                   │
-         └─────────┬─────────┘
-                   ▼
-         ┌─────────────────┐
-         │  mqtt_rx_queue  │
-         │  (10 messages)  │
-         └─────────────────┘
+    ┌───────────────┼───────────────┐
+    ▼               ▼               ▼
+┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+│ mqtt_task   │ │ main_task   │ │ httpd_task  │
+│ Priorité: 5 │ │ Priorité: 4 │ │ (interne)   │
+│ Stack: 8KB  │ │ Stack: 4KB  │ │ Stack: 8KB  │
+├─────────────┤ ├─────────────┤ ├─────────────┤
+│ Init MQTT   │ │ Messages    │ │ Requetes    │
+│ Connexion   │ │ Télémétrie  │ │ HTTP        │
+│ Reconnexion │ │             │ │ REST API    │
+└─────────────┘ └─────────────┘ └─────────────┘
+       │               │
+       └───────┬───────┘
+               ▼
+      ┌─────────────────┐
+      │  mqtt_rx_queue  │
+      │  (10 messages)  │
+      └─────────────────┘
 ```
 
 ### Topics MQTT

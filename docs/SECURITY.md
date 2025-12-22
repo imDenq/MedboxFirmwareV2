@@ -9,6 +9,33 @@ Ce guide explique comment configurer et utiliser le Secure Boot et le Flash Encr
 | **Secure Boot V1** | Intégrité | Seul le firmware signé peut démarrer |
 | **Flash Encryption** | Confidentialité | Le contenu de la flash est chiffré AES-256 |
 | **NVS Encryption** | Données | Les données sensibles sont chiffrées |
+| **TLS 1.2+** | Communication | MQTT chiffré avec le broker |
+| **mTLS** | Authentification | Certificat client requis |
+
+---
+
+## Sécurité de l'Interface Web
+
+### Accès au Serveur HTTP
+
+| Mode | URL | Sécurité |
+|------|-----|----------|
+| AP (Point d'accès) | `http://192.168.4.1` | Réseau isolé, mot de passe WPA2 |
+| STA (Connecté) | `http://<IP>` | Réseau local uniquement |
+
+### Considérations
+
+**Actuellement implémenté:**
+- Accès limité au réseau local (pas d'accès Internet)
+- Point d'accès protégé par mot de passe WPA2 (`medbox123`)
+- Validation des entrées JSON côté serveur
+- Pas de stockage des mots de passe WiFi dans les logs
+
+**Recommandations pour la production:**
+- Changer le mot de passe AP par défaut
+- Ajouter authentification HTTP (Basic Auth ou session)
+- Considérer HTTPS avec certificat auto-signé
+- Limiter les tentatives de connexion
 
 ## Fichiers Clés
 

@@ -4,11 +4,28 @@ Firmware ESP32 sécurisé pour le projet Medbox avec communication MQTT/TLS vers
 
 ## Fonctionnalités
 
+### Sécurité
 - **Secure Boot V1** - Seul le firmware signé peut démarrer
 - **Flash Encryption** - Contenu de la flash chiffré (mode développement)
 - **NVS Encryption** - Données sensibles chiffrées
 - **MQTT over TLS** - Communication sécurisée avec le broker EMQX
 - **mTLS** - Authentification mutuelle avec certificats client
+
+### Connectivité
+- **WiFi STA+AP** - Mode station + point d'accès simultané
+- **Point d'accès** - `Medbox-XXXX` actif quand WiFi déconnecté
+- **Reconnexion auto** - Reconnexion WiFi et MQTT automatique
+
+### Interface Web
+- **Serveur HTTP** - Interface de configuration sur port 80
+- **Design moderne** - Interface responsive style Apple
+- **REST API** - API JSON pour intégration
+- **Monitoring** - Status, RSSI, uptime, erreurs en temps réel
+
+### Gestion d'erreurs
+- **Codes hexadécimaux** - Format `0xCCNN` (ex: `0x0301`)
+- **Historique** - 20 dernières erreurs avec timestamp
+- **Catégories** - SYS, WIFI, MQTT, NVS, SEC, APP, HTTP
 
 ## Prérequis
 
@@ -25,7 +42,9 @@ MedboxFirmware/
 │   └── Kconfig.projbuild    # Options menuconfig
 ├── components/
 │   ├── mqtt_client/         # Client MQTT avec TLS/mTLS
-│   ├── wifi_manager/        # Gestion WiFi avec reconnexion auto
+│   ├── wifi_manager/        # Gestion WiFi STA+AP
+│   ├── web_server/          # Serveur HTTP + interface web
+│   ├── error_manager/       # Gestion erreurs centralisée
 │   └── secure_storage/      # Stockage NVS sécurisé
 ├── scripts/                 # Scripts de sécurité ESP32
 │   ├── check_esp32.py       # Vérifier l'état sécurité d'un ESP32
@@ -50,6 +69,7 @@ MedboxFirmware/
 ├── sdkconfig.defaults       # Configuration par défaut
 └── docs/
     ├── ARCHITECTURE.md      # Architecture du projet
+    ├── ERRORS.md            # Codes d'erreur (0x0000 - 0x07FF)
     └── SECURITY.md          # Guide sécurité détaillé
 ```
 
@@ -128,6 +148,30 @@ medbox/{uuid}/status      # État de la Medbox (publish)
 medbox/{uuid}/telemetry   # Télémétrie périodique (publish)
 medbox/{uuid}/commands    # Commandes reçues (subscribe)
 ```
+
+## Interface Web
+
+### Accès
+
+| Mode | URL | Quand |
+|------|-----|-------|
+| Point d'accès | `http://192.168.4.1` | WiFi déconnecté, réseau `Medbox-XXXX` |
+| Station | `http://<IP>` | WiFi connecté |
+
+### Pages
+
+- `/` - Status système (uptime, mémoire, WiFi, UUID)
+- `/wifi` - Configuration WiFi (scan + connexion)
+- `/errors` - Historique des erreurs (codes hex)
+
+### API REST
+
+| Endpoint | Méthode | Description |
+|----------|---------|-------------|
+| `/api/status` | GET | Informations système JSON |
+| `/api/wifi/scan` | GET | Liste réseaux disponibles |
+| `/api/wifi/config` | GET/POST | Config WiFi |
+| `/api/errors` | GET | Historique erreurs |
 
 ## Sécurité
 

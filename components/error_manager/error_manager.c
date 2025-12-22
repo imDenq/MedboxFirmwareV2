@@ -5,11 +5,19 @@
 
 #include "error_manager.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
 static const char *TAG = "error_mgr";
+
+// ============================================
+// Historique des erreurs (buffer circulaire)
+// ============================================
+static medbox_error_history_entry_t s_error_history[ERROR_HISTORY_SIZE];
+static uint16_t s_history_head = 0;      // Prochain index d'ecriture
+static uint16_t s_history_count = 0;     // Nombre d'entrees valides
 
 // ============================================
 // Table des erreurs avec messages en francais
@@ -84,6 +92,16 @@ static const medbox_error_info_t s_error_table[] = {
     {MEDBOX_ERR_SENSOR_FAILED,          "Echec du capteur",                        "APP"},
     {MEDBOX_ERR_BATTERY_LOW,            "Batterie faible",                         "APP"},
     {MEDBOX_ERR_BATTERY_CRITICAL,       "Batterie critique",                       "APP"},
+
+    // Erreurs Serveur Web/HTTP (0x07xx)
+    {MEDBOX_ERR_HTTP_INIT_FAILED,       "Echec d'initialisation du serveur HTTP",  "HTTP"},
+    {MEDBOX_ERR_HTTP_START_FAILED,      "Echec de demarrage du serveur HTTP",      "HTTP"},
+    {MEDBOX_ERR_HTTP_HANDLER_FAILED,    "Echec d'enregistrement du handler HTTP",  "HTTP"},
+    {MEDBOX_ERR_HTTP_RESPONSE_FAILED,   "Echec d'envoi de la reponse HTTP",        "HTTP"},
+    {MEDBOX_ERR_HTTP_INVALID_REQUEST,   "Requete HTTP invalide",                   "HTTP"},
+    {MEDBOX_ERR_HTTP_JSON_PARSE_ERROR,  "Echec de parsing JSON",                   "HTTP"},
+    {MEDBOX_ERR_HTTP_JSON_CREATE_ERROR, "Echec de creation JSON",                  "HTTP"},
+    {MEDBOX_ERR_HTTP_BUFFER_OVERFLOW,   "Depassement de buffer HTTP",              "HTTP"},
 };
 
 #define ERROR_TABLE_SIZE (sizeof(s_error_table) / sizeof(s_error_table[0]))
@@ -98,8 +116,36 @@ static const char *s_unknown_category = "???";
 
 medbox_err_t error_manager_init(void)
 {
-    ESP_LOGI(TAG, "Gestionnaire d'erreurs initialise (%d codes)", ERROR_TABLE_SIZE);
+    // Initialiser l'historique
+    memset(s_error_history, 0, sizeof(s_error_history));
+    s_history_head = 0;
+    s_history_count = 0;
+
+    ESP_LOGI(TAG, "Gestionnaire d'erreurs initialise (%d codes, historique %d)",
+             ERROR_TABLE_SIZE, ERROR_HISTORY_SIZE);
     return MEDBOX_OK;
+}
+
+// Ajoute une erreur a l'historique
+static void error_history_add(medbox_err_t err, const char *context)
+{
+    medbox_error_history_entry_t *entry = &s_error_history[s_history_head];
+
+    entry->code = err;
+    entry->timestamp = (uint32_t)(esp_timer_get_time() / 1000000ULL);
+
+    if (context != NULL) {
+        strncpy(entry->context, context, sizeof(entry->context) - 1);
+        entry->context[sizeof(entry->context) - 1] = '\0';
+    } else {
+        entry->context[0] = '\0';
+    }
+
+    // Avancer la tete du buffer circulaire
+    s_history_head = (s_history_head + 1) % ERROR_HISTORY_SIZE;
+    if (s_history_count < ERROR_HISTORY_SIZE) {
+        s_history_count++;
+    }
 }
 
 const medbox_error_info_t* medbox_err_get_info(medbox_err_t err)
@@ -138,6 +184,7 @@ const char* medbox_err_get_category(medbox_err_t err)
         case 0x04: return "NVS";
         case 0x05: return "SEC";
         case 0x06: return "APP";
+        case 0x07: return "HTTP";
         default:   return s_unknown_category;
     }
 }
@@ -152,6 +199,9 @@ void medbox_log_error(medbox_err_t err, const char *tag, const char *context)
     } else {
         ESP_LOGE(tag, "[%s-0x%04X] %s", cat, err, msg);
     }
+
+    // Ajouter a l'historique
+    error_history_add(err, context);
 }
 
 void medbox_log_warn(const char *tag, const char *format, ...)
@@ -207,4 +257,50 @@ medbox_err_t medbox_err_from_esp(esp_err_t esp_err, uint8_t category)
                 default:   return MEDBOX_ERR_SYS_INIT_FAILED;
             }
     }
+}
+
+// ============================================
+// API Historique des erreurs
+// ============================================
+
+medbox_err_t error_manager_get_history(medbox_error_history_entry_t *entries,
+                                       uint16_t max_entries,
+                                       uint16_t *num_entries)
+{
+    if (entries == NULL || num_entries == NULL) {
+        return MEDBOX_ERR_SYS_INVALID_ARG;
+    }
+
+    uint16_t count = (s_history_count < max_entries) ? s_history_count : max_entries;
+    *num_entries = count;
+
+    if (count == 0) {
+        return MEDBOX_OK;
+    }
+
+    // Lire les entrees du plus recent au plus ancien
+    for (uint16_t i = 0; i < count; i++) {
+        // Calculer l'index dans le buffer circulaire
+        int16_t idx = (int16_t)s_history_head - 1 - (int16_t)i;
+        if (idx < 0) {
+            idx += ERROR_HISTORY_SIZE;
+        }
+        memcpy(&entries[i], &s_error_history[idx], sizeof(medbox_error_history_entry_t));
+    }
+
+    return MEDBOX_OK;
+}
+
+medbox_err_t error_manager_clear_history(void)
+{
+    memset(s_error_history, 0, sizeof(s_error_history));
+    s_history_head = 0;
+    s_history_count = 0;
+    ESP_LOGI(TAG, "Historique des erreurs efface");
+    return MEDBOX_OK;
+}
+
+uint16_t error_manager_get_history_count(void)
+{
+    return s_history_count;
 }

@@ -12,6 +12,7 @@
 #include "wifi_manager.h"
 #include "mqtt_client_medbox.h"
 #include "error_manager.h"
+#include "web_server.h"
 
 static const char *TAG = "medbox_main";
 
@@ -35,6 +36,9 @@ static char topic_evt_dispense_confirmed[160];
 
 // UUID de la Medbox
 static char medbox_uuid[MEDBOX_UUID_MAX_LEN];
+
+// Suffixe pour le SSID de l'AP (4 derniers caracteres UUID)
+static char ap_uuid_suffix[8] = {0};
 
 // Niveau batterie simulé (à remplacer par vraie lecture)
 static uint8_t battery_level = 100;
@@ -175,7 +179,22 @@ static void process_command(const char *topic, const char *payload, size_t len)
 static void on_wifi_state_change(wifi_state_t state)
 {
     const char *state_str[] = {"DISCONNECTED", "CONNECTING", "CONNECTED", "FAILED"};
-    ESP_LOGI(TAG, "État WiFi: %s", state_str[state]);
+    ESP_LOGI(TAG, "Etat WiFi: %s", state_str[state]);
+
+    // Gestion dynamique de l'AP selon l'etat WiFi
+    if (state == WIFI_STATE_CONNECTED) {
+        // WiFi connecte -> arreter l'AP si actif
+        if (wifi_manager_is_ap_active()) {
+            ESP_LOGI(TAG, "WiFi connecte, arret du point d'acces");
+            wifi_manager_stop_ap();
+        }
+    } else if (state == WIFI_STATE_DISCONNECTED || state == WIFI_STATE_FAILED) {
+        // WiFi deconnecte -> demarrer l'AP si inactif
+        if (!wifi_manager_is_ap_active() && ap_uuid_suffix[0] != '\0') {
+            ESP_LOGI(TAG, "WiFi deconnecte, demarrage du point d'acces");
+            wifi_manager_start_ap(ap_uuid_suffix);
+        }
+    }
 }
 
 // Tâche MQTT - Gère la connexion et la réception des messages
@@ -401,16 +420,44 @@ void app_main(void)
         return;
     }
 
-    // Attendre la connexion WiFi (timeout 30s)
-    ret = wifi_manager_wait_connected(30000);
-    if (ret != ESP_OK) {
-        medbox_log_error(MEDBOX_ERR_WIFI_CONNECT_TIMEOUT, TAG, "30s");
-        return;
+    // Preparer le suffixe pour l'AP (4 derniers caracteres de l'UUID)
+    size_t uuid_len = strlen(medbox_uuid);
+    if (uuid_len > 4) {
+        strncpy(ap_uuid_suffix, medbox_uuid + uuid_len - 4, sizeof(ap_uuid_suffix) - 1);
+    } else {
+        strncpy(ap_uuid_suffix, medbox_uuid, sizeof(ap_uuid_suffix) - 1);
     }
 
-    char ip_str[16];
-    wifi_manager_get_ip(ip_str);
-    ESP_LOGI(TAG, "Connecté au WiFi! IP: %s", ip_str);
+    // Attendre la connexion WiFi initiale (timeout 30s)
+    // Si timeout, on continue quand même - le WiFi manager retente en arrière-plan
+    ret = wifi_manager_wait_connected(30000);
+    if (ret == ESP_OK) {
+        char ip_str[16];
+        wifi_manager_get_ip(ip_str);
+        ESP_LOGI(TAG, "Connecte au WiFi! IP: %s", ip_str);
+        // AP non demarre car WiFi connecte
+    } else {
+        ESP_LOGW(TAG, "WiFi non connecte apres 30s - demarrage point d'acces");
+        // Demarrer le point d'acces car WiFi non connecte
+        ret = wifi_manager_start_ap(ap_uuid_suffix);
+        if (ret == ESP_OK) {
+            char ap_ssid[32];
+            char ap_ip[16];
+            wifi_manager_get_ap_ssid(ap_ssid);
+            wifi_manager_get_ap_ip(ap_ip);
+            ESP_LOGI(TAG, "Point d'acces demarre: %s (%s)", ap_ssid, ap_ip);
+        } else {
+            ESP_LOGW(TAG, "Echec demarrage point d'acces");
+        }
+    }
+
+    // Demarrer le serveur web
+    ret = web_server_start();
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Serveur web demarre sur port %d", WEB_SERVER_PORT);
+    } else {
+        ESP_LOGW(TAG, "Echec demarrage serveur web");
+    }
 
     // Créer les tâches FreeRTOS
     BaseType_t task_ret;
