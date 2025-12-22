@@ -2,7 +2,7 @@
 
 ## Vue d'ensemble
 
-Le firmware Medbox est une application ESP32 basée sur ESP-IDF v5.5 qui communique avec un broker MQTT (EMQX) pour le contrôle et la télémétrie d'une Medbox.
+Le firmware Medbox est une application ESP32 basée sur ESP-IDF v5.5.1 qui communique avec un broker MQTT (EMQX) via TLS pour le contrôle et la télémétrie d'une Medbox.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -20,7 +20,7 @@ Le firmware Medbox est une application ESP32 basée sur ESP-IDF v5.5 qui communi
 │              └─────────────────────┘                            │
 └─────────────────────────────────────────────────────────────────┘
                           │
-                          │ MQTT (port 1883/8883)
+                          │ MQTT over TLS (port 8883)
                           ▼
               ┌─────────────────────┐
               │    Broker EMQX      │
@@ -30,23 +30,49 @@ Le firmware Medbox est une application ESP32 basée sur ESP-IDF v5.5 qui communi
 
 ---
 
+## Sécurité
+
+Le firmware utilise une architecture de sécurité complète :
+
+| Fonctionnalité | État | Description |
+|----------------|------|-------------|
+| **Secure Boot V1** | Activé | Seul le firmware signé peut démarrer |
+| **Flash Encryption** | Activé (dev) | Contenu de la flash chiffré AES-256 |
+| **NVS Encryption** | Activé | Données sensibles chiffrées |
+| **TLS 1.2+** | Activé | Communication MQTT chiffrée |
+| **mTLS** | Activé | Authentification par certificat client |
+
+---
+
 ## Structure du Projet
 
 ```
 MedboxFirmware/
-├── components/                 # Composants réutilisables
-│   ├── secure_storage/         # Gestion NVS (certificats, UUID)
-│   ├── wifi_manager/           # Connexion WiFi
-│   └── mqtt_client/            # Client MQTT avec TLS
-├── main/
-│   ├── main.c                  # Point d'entrée, orchestration
-│   └── Kconfig.projbuild       # Options de configuration
-├── tools/                      # Scripts utilitaires
-├── build.bat                   # Script de compilation
-├── flash.bat                   # Script de flash (COM5)
-├── menuconfig.bat              # Configuration du projet
-├── partitions.csv              # Table des partitions
-└── sdkconfig.defaults          # Configuration par défaut
+├── main/                      # Code source principal
+│   ├── main.c                 # Point d'entrée, orchestration FreeRTOS
+│   └── Kconfig.projbuild      # Options de configuration menuconfig
+├── components/                # Composants réutilisables
+│   ├── mqtt_client/           # Client MQTT avec TLS/mTLS
+│   ├── wifi_manager/          # Gestion WiFi avec reconnexion auto
+│   └── secure_storage/        # Stockage NVS sécurisé
+├── scripts/                   # Scripts de sécurité ESP32
+│   ├── check_esp32.py         # Vérifier l'état sécurité d'un ESP32
+│   ├── generate_key.py        # Générer la clé de chiffrement
+│   ├── setup_esp32.py         # Configurer un nouvel ESP32 (burn eFuses)
+│   ├── encrypted_flash.py     # Flash pré-chiffré (illimité)
+│   ├── flash.bat              # Build + Flash en une commande
+│   └── setup.bat              # Setup sécurité ESP32
+├── tools/                     # Scripts pour certificats TLS
+│   ├── generate_certs.sh      # Génération certificats CA + client
+│   ├── setup_emqx_tls.sh      # Configuration TLS pour EMQX
+│   └── provision_nvs.py       # Provisioning certificats dans NVS
+├── keys/                      # Clés de sécurité (NON VERSIONNÉ)
+│   ├── secure_boot_signing_key.pem
+│   └── flash_encryption_key.bin
+├── certs/                     # Certificats TLS (NON VERSIONNÉ)
+├── menuconfig.bat             # Configuration du projet
+├── partitions.csv             # Table des partitions
+└── sdkconfig.defaults         # Configuration par défaut
 ```
 
 ---
@@ -87,29 +113,11 @@ esp_err_t secure_storage_set_client_key(const char *key, size_t len);
 bool secure_storage_certs_provisioned(void);
 ```
 
-**Flux de données**:
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  Provisioning   │───▶│  secure_storage │────▶│   NVS Flash     │
-│    (scripts)    │     │      API        │     │   (partition)   │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-                               │
-                               ▼
-                        ┌─────────────────┐
-                        │   mqtt_client   │
-                        │ (lit les certs) │
-                        └─────────────────┘
-```
-
 ---
 
 ### 2. WiFi Manager (`components/wifi_manager/`)
 
 **Rôle**: Gestion de la connexion WiFi avec reconnexion automatique.
-
-**Fichiers**:
-- `include/wifi_manager.h` - API publique
-- `wifi_manager.c` - Implémentation
 
 **États WiFi**:
 ```
@@ -141,36 +149,16 @@ int8_t wifi_manager_get_rssi(void);
 void wifi_manager_set_callback(wifi_event_callback_t callback);
 ```
 
-**Fonctionnement interne**:
-1. `wifi_manager_init()` initialise le driver WiFi ESP32
-2. `wifi_manager_connect()` démarre la connexion
-3. Le handler d'événements gère:
-   - `WIFI_EVENT_STA_START` → Lance `esp_wifi_connect()`
-   - `WIFI_EVENT_STA_DISCONNECTED` → Retente jusqu'à 10 fois
-   - `IP_EVENT_STA_GOT_IP` → Connexion réussie
-
 ---
 
 ### 3. MQTT Client (`components/mqtt_client/`)
 
-**Rôle**: Communication MQTT avec le broker EMQX, support TLS optionnel.
-
-**Fichiers**:
-- `include/mqtt_client_medbox.h` - API publique
-- `mqtt_client_medbox.c` - Implémentation
-
-**États MQTT**:
-```
-DISCONNECTED ──▶ CONNECTING ──▶ CONNECTED
-      ▲               │              │
-      │               ▼              │
-      └─────────── ERROR ◀───────────┘
-```
+**Rôle**: Communication MQTT avec le broker EMQX via TLS/mTLS.
 
 **Configuration**:
 ```c
 typedef struct {
-    const char *broker_uri;      // "mqtt://IP:1883" ou "mqtts://IP:8883"
+    const char *broker_uri;      // "mqtts://IP:8883"
     const char *client_id;       // UUID de la Medbox
     const char *username;        // Optionnel
     const char *password;        // Optionnel
@@ -198,14 +186,6 @@ int mqtt_client_medbox_unsubscribe(const char *topic);
 // État
 bool mqtt_client_medbox_is_connected(void);
 mqtt_client_state_t mqtt_client_medbox_get_state(void);
-```
-
-**Chargement des certificats (mode TLS)**:
-```c
-// Dans mqtt_client_medbox_init(), si TLS activé:
-1. secure_storage_get_ca_cert()      → Charge le CA
-2. secure_storage_get_client_cert()  → Charge le cert client (si mTLS)
-3. secure_storage_get_client_key()   → Charge la clé privée (si mTLS)
 ```
 
 ---
@@ -245,29 +225,6 @@ mqtt_client_state_t mqtt_client_medbox_get_state(void);
          └─────────────────┘
 ```
 
-### Flux de démarrage
-
-```
-1. app_main()
-   │
-   ├─▶ secure_storage_init()
-   │
-   ├─▶ [MODE DEV] strncpy(medbox_uuid, CONFIG_MEDBOX_DEV_UUID)
-   │   [MODE PROD] secure_storage_get_medbox_uuid()
-   │
-   ├─▶ Construire les topics:
-   │   - medbox/{uuid}/commands  (subscribe)
-   │   - medbox/{uuid}/status    (publish)
-   │   - medbox/{uuid}/telemetry (publish)
-   │
-   ├─▶ wifi_manager_init()
-   ├─▶ wifi_manager_connect(SSID, PASSWORD)
-   ├─▶ wifi_manager_wait_connected(30s)
-   │
-   ├─▶ xTaskCreate(mqtt_task, ...)
-   └─▶ xTaskCreate(main_task, ...)
-```
-
 ### Topics MQTT
 
 | Topic | Direction | QoS | Description |
@@ -279,7 +236,7 @@ mqtt_client_state_t mqtt_client_medbox_get_state(void);
 **Format de la télémétrie** (JSON):
 ```json
 {
-    "uuid": "medbox-dev-001",
+    "uuid": "945c1ffc-3801-4af1-bb51-bb1e1710abb1",
     "uptime": 307,
     "heap_free": 245678,
     "rssi": -66
@@ -297,169 +254,126 @@ Accessible via `idf.py menuconfig` ou `menuconfig.bat`.
 #### WiFi Configuration
 | Option | Type | Défaut | Description |
 |--------|------|--------|-------------|
-| `MEDBOX_WIFI_SSID` | string | "your_ssid" | SSID du réseau |
-| `MEDBOX_WIFI_PASSWORD` | string | "your_password" | Mot de passe |
+| `MEDBOX_WIFI_SSID` | string | "" | SSID du réseau |
+| `MEDBOX_WIFI_PASSWORD` | string | "" | Mot de passe |
 
 #### MQTT Configuration
 | Option | Type | Défaut | Description |
 |--------|------|--------|-------------|
 | `MEDBOX_MQTT_BROKER_IP` | string | "185.157.245.46" | IP du broker |
-| `MEDBOX_MQTT_BROKER_PORT` | int | 1883 | Port (1883=TCP, 8883=TLS) |
-| `MEDBOX_MQTT_USE_TLS` | bool | n | Activer TLS |
+| `MEDBOX_MQTT_BROKER_PORT` | int | 8883 | Port TLS |
+| `MEDBOX_MQTT_USE_TLS` | bool | y | Activer TLS |
 | `MEDBOX_MQTT_VERIFY_SERVER` | bool | y | Vérifier cert serveur |
 | `MEDBOX_MQTT_USE_CLIENT_CERT` | bool | y | Activer mTLS |
-| `MEDBOX_MQTT_USERNAME` | string | "" | Username (optionnel) |
-| `MEDBOX_MQTT_PASSWORD` | string | "" | Password (optionnel) |
-| `MEDBOX_MQTT_TOPIC_BASE` | string | "medbox" | Préfixe des topics |
+| `MEDBOX_MQTT_TOPIC_BASE` | string | "medbox/box" | Préfixe des topics |
 
 #### Security Configuration
 | Option | Type | Défaut | Description |
 |--------|------|--------|-------------|
 | `MEDBOX_DEV_MODE` | bool | y | Mode développement |
-| `MEDBOX_DEV_UUID` | string | "medbox-dev-001" | UUID de test |
+| `MEDBOX_DEV_UUID` | string | "945c1ffc-..." | UUID de dev |
 | `MEDBOX_PROVISIONING_MODE` | bool | n | Mode provisioning |
-
----
-
-## Modes de Fonctionnement
-
-### 1. Mode Développement (actuel)
-
-```
-CONFIG_MEDBOX_DEV_MODE=y
-```
-
-- UUID hardcodé (`medbox-dev-001`)
-- Pas besoin de provisioning
-- Pas de TLS (port 1883)
-- Pour les tests rapides
-
-### 2. Mode Production
-
-```
-CONFIG_MEDBOX_DEV_MODE=n
-CONFIG_MEDBOX_MQTT_USE_TLS=y
-```
-
-- UUID lu depuis NVS
-- Certificats TLS requis dans NVS
-- Connexion sécurisée (port 8883)
-- mTLS pour authentification
-
-### 3. Mode Provisioning
-
-```
-CONFIG_MEDBOX_DEV_MODE=n
-CONFIG_MEDBOX_PROVISIONING_MODE=y
-```
-
-- Attend l'injection des certificats
-- Utilisé lors de la fabrication
-- Utiliser `tools/provision_nvs.py`
 
 ---
 
 ## Partition Flash
 
-Définie dans `partitions.csv`:
+Définie dans `partitions.csv` (offset 0x10000 pour bootloader étendu) :
 
 ```
-# Name,    Type, SubType,  Offset,   Size
-nvs,       data, nvs,      0x9000,   0x6000   (24 KB)
-phy_init,  data, phy,      0xf000,   0x1000   (4 KB)
-factory,   app,  factory,  0x10000,  0x1F0000 (1984 KB)
+# Name,       Type, SubType,  Offset,   Size,     Flags
+nvs,          data, nvs,      0x11000,  0x4000,
+nvs_keys,     data, nvs_keys, 0x15000,  0x1000,   encrypted
+phy_init,     data, phy,      0x16000,  0x1000,
+factory,      app,  factory,  0x20000,  0x1E0000, encrypted
 ```
 
 ```
 ┌────────────────────────────────────────┐ 0x000000
-│            Bootloader (24KB)           │
-├────────────────────────────────────────┤ 0x008000
-│         Partition Table (4KB)          │
-├────────────────────────────────────────┤ 0x009000
-│              NVS (24KB)                │ ← Certificats, UUID, WiFi
-├────────────────────────────────────────┤ 0x00F000
-│           PHY Init (4KB)               │
+│         Bootloader (64KB)              │ ← Signé (Secure Boot)
 ├────────────────────────────────────────┤ 0x010000
+│         Partition Table (4KB)          │
+├────────────────────────────────────────┤ 0x011000
+│              NVS (16KB)                │ ← Certificats, UUID
+├────────────────────────────────────────┤ 0x015000
+│           NVS Keys (4KB)               │ ← Clés NVS (encrypted)
+├────────────────────────────────────────┤ 0x016000
+│           PHY Init (4KB)               │
+├────────────────────────────────────────┤ 0x020000
 │                                        │
-│         Application (1984KB)           │ ← Firmware Medbox
+│      Application (~1.9MB)              │ ← Firmware (encrypted)
 │                                        │
 └────────────────────────────────────────┘ 0x200000
 ```
 
 ---
 
-## Flux de Communication MQTT
+## Scripts
 
-### Connexion
-```
-ESP32                                    EMQX Broker
-  │                                          │
-  │──────── CONNECT (client_id=uuid) ───────▶│
-  │                                          │
-  │◀─────────── CONNACK ────────────────────│
-  │                                          │
-  │──── SUBSCRIBE (medbox/uuid/commands) ───▶│
-  │                                          │
-  │◀─────────── SUBACK ─────────────────────│
-```
+### Scripts de sécurité (`scripts/`)
 
-### Publication Télémétrie (toutes les 30s)
-```
-ESP32                                    EMQX Broker
-  │                                          │
-  │── PUBLISH (medbox/uuid/telemetry) ──────▶│
-  │   {"uuid":"...","uptime":...}            │
-```
+| Script | Usage |
+|--------|-------|
+| `check_esp32.py` | Vérifier l'état sécurité d'un ESP32 |
+| `generate_key.py` | Générer la clé de chiffrement flash |
+| `setup_esp32.py` | Configurer un nouvel ESP32 (burn eFuses) |
+| `encrypted_flash.py` | Flash pré-chiffré (illimité) |
+| `flash.bat` | Build + Flash en une commande |
 
-### Réception Commande
+### Scripts TLS (`tools/`)
+
+| Script | Usage |
+|--------|-------|
+| `generate_certs.sh` | Génère CA + certificats client |
+| `setup_emqx_tls.sh` | Configure TLS sur EMQX |
+| `provision_nvs.py` | Injecte certificats dans NVS |
+
+---
+
+## Workflow de développement
+
 ```
-ESP32                                    EMQX Broker
-  │                                          │
-  │◀── PUBLISH (medbox/uuid/commands) ──────│
-  │                                          │
-  │          ┌──────────────┐                │
-  │          │ on_mqtt_message()             │
-  │          │ → mqtt_rx_queue               │
-  │          │ → main_task traite            │
-  │          └──────────────┘                │
+1. Configurer WiFi
+   └── menuconfig.bat
+
+2. Build
+   └── idf.py build
+
+3. Setup ESP32 (une seule fois par chip)
+   └── python scripts/setup_esp32.py COM5
+
+4. Flash
+   └── python scripts/encrypted_flash.py COM5
+   └── ou: scripts\flash.bat COM5
+
+5. Monitor
+   └── idf.py -p COM5 monitor
 ```
 
 ---
 
-## Scripts Utilitaires
+## Modes de Fonctionnement
 
-### build.bat
-Double-cliquer pour compiler le projet.
+### Mode Développement (actuel)
 
-### flash.bat
-Double-cliquer pour flasher sur COM5 et ouvrir le moniteur série.
-
-### menuconfig.bat
-Double-cliquer pour configurer le projet (WiFi, MQTT, etc.).
-
-### tools/generate_certs.sh
-Génère les certificats TLS (CA + client) pour une Medbox.
-```bash
-./generate_certs.sh medbox-001
-# Crée: certs/ca/ca.crt, certs/medbox-001/client.crt, client.key
+```
+CONFIG_MEDBOX_DEV_MODE=y
+CONFIG_MEDBOX_MQTT_USE_TLS=y
+CONFIG_SECURE_FLASH_ENCRYPTION_MODE_DEVELOPMENT=y
 ```
 
-### tools/provision_nvs.py
-Injecte les certificats et UUID dans une image NVS.
-```bash
-python provision_nvs.py --uuid medbox-001 \
-    --ca-cert certs/ca/ca.crt \
-    --client-cert certs/medbox-001/client.crt \
-    --client-key certs/medbox-001/client.key \
-    --flash --port COM5
+- UUID hardcodé dans sdkconfig
+- TLS activé (port 8883)
+- Flash Encryption en mode développement (flashs illimités avec script)
+
+### Mode Production
+
+```
+CONFIG_MEDBOX_DEV_MODE=n
+CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE=y
 ```
 
----
-
-## Prochaines Étapes
-
-1. **Activer TLS** sur EMQX et le firmware
-2. **Implémenter le traitement des commandes** dans `main_task`
-3. **Ajouter les capteurs/actionneurs** spécifiques à la Medbox
-4. **Provisioning production** avec certificats uniques par appareil
-5. **Secure Boot + Flash Encryption** pour la production
+- UUID lu depuis NVS
+- Certificats TLS requis dans NVS
+- Flash Encryption verrouillé
+- Secure Boot permanent

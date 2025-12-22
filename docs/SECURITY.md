@@ -6,8 +6,8 @@ Ce guide explique comment configurer et utiliser le Secure Boot et le Flash Encr
 
 | Fonctionnalité | Protection | Description |
 |----------------|------------|-------------|
-| **Secure Boot V2** | Écriture | Seul le firmware signé peut démarrer |
-| **Flash Encryption** | Lecture | Le contenu de la flash est chiffré |
+| **Secure Boot V1** | Intégrité | Seul le firmware signé peut démarrer |
+| **Flash Encryption** | Confidentialité | Le contenu de la flash est chiffré AES-256 |
 | **NVS Encryption** | Données | Les données sensibles sont chiffrées |
 
 ## Fichiers Clés
@@ -34,26 +34,42 @@ keys/
 
 ## Configuration d'un NOUVEL ESP32
 
-### Étape 1: Générer la clé de chiffrement (une seule fois)
+### Etape 1: Générer les clés (une seule fois par projet)
 
 ```bash
+# Clé de chiffrement flash
 python scripts/generate_key.py
+
+# Clé de signature Secure Boot (si pas déjà générée)
+espsecure.py generate_signing_key keys/secure_boot_signing_key.pem
 ```
 
-Cela crée `keys/flash_encryption_key.bin`.
+### Etape 2: Vérifier l'état de l'ESP32
 
-### Étape 2: Configurer l'ESP32
+```bash
+python scripts/check_esp32.py COM5
+```
+
+Si l'ESP32 est vierge, vous verrez :
+```
+[VIRGIN ESP32]
+This ESP32 has no security configured.
+```
+
+### Etape 3: Configurer l'ESP32
 
 ```bash
 python scripts/setup_esp32.py COM5
 ```
 
 Cela grave dans les eFuses :
-- La clé de chiffrement
+- La clé de chiffrement (BLOCK1)
 - FLASH_CRYPT_CNT = 1 (active le chiffrement)
 - FLASH_CRYPT_CONFIG = 0xF
 
-### Étape 3: Build et Flash
+**ATTENTION** : Cette opération est **IRRÉVERSIBLE** !
+
+### Etape 4: Build et Flash
 
 ```bash
 idf.py build
@@ -65,7 +81,7 @@ Ou en une commande :
 scripts\flash.bat COM5
 ```
 
-### Étape 4: Monitor
+### Etape 5: Monitor
 
 ```bash
 idf.py -p COM5 monitor
@@ -79,7 +95,7 @@ idf.py -p COM5 monitor
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   idf.py build  │────▶│ encrypted_flash │────▶│   ESP32 reçoit  │
+│   idf.py build  │────>│ encrypted_flash │────>│   ESP32 reçoit  │
 │                 │     │    (chiffre)    │     │  binaire chiffré│
 └─────────────────┘     └─────────────────┘     └─────────────────┘
         │                       │                       │
@@ -94,11 +110,11 @@ idf.py -p COM5 monitor
 - Clé sous ton contrôle
 - Même workflow pour DEV et PROD
 
-### Avec clé auto-générée (ANCIEN)
+### Avec clé auto-générée (ANCIEN - à éviter)
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   idf.py build  │────▶│  idf.py flash   │────▶│  ESP32 chiffre  │
+│   idf.py build  │────>│  idf.py flash   │────>│  ESP32 chiffre  │
 │                 │     │   (plaintext)   │     │   lui-même      │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
         │                       │                       │
@@ -110,29 +126,55 @@ idf.py -p COM5 monitor
 
 **Inconvénients :**
 - Limité à 4 flashs
-- Clé non récupérable
+- Clé générée par l'ESP32, non récupérable
 
 ---
 
-## Vérifier l'état d'un ESP32
+## Commandes de Diagnostic
+
+### Vérifier l'état complet d'un ESP32
 
 ```bash
+# État sécurité (script Medbox)
 python scripts/check_esp32.py COM5
+
+# Dump complet des eFuses
+espefuse.py -p COM5 summary
+
+# Voir les valeurs brutes
+espefuse.py -p COM5 dump
 ```
 
-Résultat exemple :
-```
-  Security Status:
-  ----------------------------------------
-  Flash Encryption: ENABLED
-  FLASH_CRYPT_CNT:  1 (0b0000001)
-  Plaintext flashes remaining: 3
+### Résultat type (ESP32 configuré)
 
-  Secure Boot V1:   ENABLED
-  Secure Boot V2:   NOT ENABLED
-
-  Key Read Protect: YES (keys cannot be extracted)
 ```
+Security Status:
+----------------------------------------
+Flash Encryption: ENABLED
+FLASH_CRYPT_CNT:  1 (0b0000001)
+Plaintext flashes remaining: 3
+
+Secure Boot V1:   ENABLED
+Secure Boot V2:   NOT ENABLED
+
+Key Read Protect: YES (keys cannot be extracted)
+```
+
+---
+
+## Secure Boot V1 vs V2
+
+Ce projet utilise **Secure Boot V1** :
+
+| Aspect | V1 (utilisé) | V2 |
+|--------|--------------|-----|
+| Algorithme | AES-256 + ECDSA | RSA-3072 ou ECDSA-256 |
+| Clés de signature | 1 clé | Jusqu'à 3 clés |
+| Révocation de clé | Non | Oui |
+| Rollback protection | Non | Oui |
+| Chips supportés | ESP32 | ESP32 ECO3+, S2, S3, C3... |
+
+**Pourquoi V1 ?** Suffisant pour la plupart des cas, plus simple à configurer.
 
 ---
 
@@ -144,34 +186,85 @@ Pour passer en production, modifiez `sdkconfig.defaults` :
 # Changer DEVELOPMENT en RELEASE
 CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE=y
 
+# Désactiver le mode dev
+CONFIG_MEDBOX_DEV_MODE=n
+
 # Désactiver les logs de debug
 CONFIG_LOG_DEFAULT_LEVEL_WARN=y
 ```
 
-Et protégez les clés en lecture :
+Et protégez les clés en lecture (optionnel mais recommandé) :
 ```bash
-python -m espefuse --port COM5 burn_efuse RD_DIS 3
+espefuse.py -p COM5 burn_efuse RD_DIS 3
 ```
+
+**ATTENTION** : En mode RELEASE, les eFuses sont verrouillés définitivement !
 
 ---
 
 ## Dépannage
 
 ### "invalid header" au boot
-La flash contient des données non chiffrées mais l'ESP32 attend du chiffré.
-Solution : Reflasher tout avec `encrypted_flash.py`.
+
+**Cause** : La flash contient des données non chiffrées mais l'ESP32 attend du chiffré.
+
+**Solution** :
+```bash
+python scripts/encrypted_flash.py COM5
+```
 
 ### "secure boot verification failed"
-Le firmware n'est pas signé avec la bonne clé.
-Solution : Vérifiez que `keys/secure_boot_signing_key.pem` est correct.
+
+**Cause** : Le firmware n'est pas signé avec la bonne clé.
+
+**Solution** : Vérifiez que `keys/secure_boot_signing_key.pem` est la clé utilisée lors du setup initial.
 
 ### "FLASH_CRYPT_CNT exhausted"
-Plus de flashs plaintext disponibles.
-Solution : Utilisez `encrypted_flash.py` ou un nouvel ESP32.
+
+**Cause** : Plus de flashs plaintext disponibles (max 4).
+
+**Solution** :
+1. Utilisez `encrypted_flash.py` (pas de limite)
+2. Ou utilisez un nouvel ESP32 configuré avec votre clé
+
+### "Failed to connect to ESP32"
+
+**Cause** : Problème de communication série.
+
+**Solutions** :
+1. Vérifiez le port COM
+2. Maintenez le bouton BOOT enfoncé pendant le flash
+3. Vérifiez les drivers USB
+
+---
+
+## Sécurité des Clés
+
+### Ce qu'il faut protéger
+
+| Fichier | Importance | Conséquence si perdu |
+|---------|------------|---------------------|
+| `secure_boot_signing_key.pem` | CRITIQUE | Impossible de signer de nouvelles versions |
+| `flash_encryption_key.bin` | CRITIQUE | Impossible de flasher les ESP32 configurés |
+
+### Bonnes pratiques
+
+1. **Ne jamais commiter** les clés dans git
+2. **Sauvegarder** sur un support externe sécurisé
+3. **Chiffrer** les sauvegardes (ex: VeraCrypt, 7zip avec mot de passe)
+4. **Limiter l'accès** aux personnes autorisées
+
+### Pour les collaborateurs
+
+Chaque développeur doit :
+1. Demander les clés au responsable du projet
+2. Les stocker dans `keys/` (ignoré par git)
+3. Ne jamais les partager par email/chat non chiffré
 
 ---
 
 ## Références
 
 - [ESP-IDF Flash Encryption](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/security/flash-encryption.html)
-- [ESP-IDF Secure Boot V2](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/security/secure-boot-v2.html)
+- [ESP-IDF Secure Boot V1](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/security/secure-boot-v1.html)
+- [ESP32 eFuse](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/system/efuse.html)

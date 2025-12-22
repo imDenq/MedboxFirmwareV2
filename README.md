@@ -161,20 +161,6 @@ Port: 8883 (TLS)
 Topic base: medbox/box
 ```
 
-## Dépannage
-
-### "UUID non provisionné"
-Activer le mode provisioning dans menuconfig ou flasher une image NVS valide.
-
-### "certificate verify failed"
-Vérifier que le certificat CA sur l'ESP32 correspond à celui du serveur EMQX.
-
-### "invalid header" au boot
-Flash contient des données non chiffrées. Reflasher avec `encrypted_flash.py`.
-
-### "FLASH_CRYPT_CNT exhausted"
-Plus de flashs plaintext disponibles. Utiliser `encrypted_flash.py` ou un nouvel ESP32.
-
 ## Licence
 
-Propriétaire - Tous droits réservés.
+Propriétaire Medbox - Tous droits réservés.
