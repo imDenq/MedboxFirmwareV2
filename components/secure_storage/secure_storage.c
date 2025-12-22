@@ -2,6 +2,7 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_log.h"
+#include "error_manager.h"
 #include <string.h>
 
 static const char *TAG = "secure_storage";
@@ -29,14 +30,14 @@ esp_err_t secure_storage_init(void)
     // Ouvrir le namespace pour les certificats
     ret = nvs_open(NVS_NAMESPACE_CERTS, NVS_READWRITE, &nvs_certs_handle);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Erreur ouverture NVS certs: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_NVS_INIT_FAILED, TAG, "certs namespace");
         return ret;
     }
 
     // Ouvrir le namespace pour la configuration
     ret = nvs_open(NVS_NAMESPACE_CONFIG, NVS_READWRITE, &nvs_config_handle);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Erreur ouverture NVS config: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_NVS_INIT_FAILED, TAG, "config namespace");
         nvs_close(nvs_certs_handle);
         return ret;
     }
@@ -57,13 +58,13 @@ esp_err_t secure_storage_set_ca_cert(const char *cert, size_t len)
 
     esp_err_t ret = nvs_set_blob(nvs_certs_handle, NVS_KEY_CA_CERT, cert, len);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Erreur écriture CA cert: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_NVS_WRITE_FAILED, TAG, "CA cert");
         return ret;
     }
 
     ret = nvs_commit(nvs_certs_handle);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Erreur commit CA cert: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_NVS_WRITE_FAILED, TAG, "CA cert commit");
         return ret;
     }
 
@@ -90,7 +91,7 @@ esp_err_t secure_storage_get_ca_cert(char *cert, size_t max_len, size_t *out_len
     }
 
     if (required_size > max_len) {
-        ESP_LOGE(TAG, "Buffer trop petit pour CA cert");
+        medbox_log_error(MEDBOX_ERR_SYS_NO_MEMORY, TAG, "CA cert buffer");
         return ESP_ERR_NO_MEM;
     }
 
@@ -114,13 +115,13 @@ esp_err_t secure_storage_set_client_cert(const char *cert, size_t len)
 
     esp_err_t ret = nvs_set_blob(nvs_certs_handle, NVS_KEY_CLIENT_CERT, cert, len);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Erreur écriture client cert: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_NVS_WRITE_FAILED, TAG, "client cert");
         return ret;
     }
 
     ret = nvs_commit(nvs_certs_handle);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Erreur commit client cert: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_NVS_WRITE_FAILED, TAG, "client cert commit");
         return ret;
     }
 
@@ -147,7 +148,7 @@ esp_err_t secure_storage_get_client_cert(char *cert, size_t max_len, size_t *out
     }
 
     if (required_size > max_len) {
-        ESP_LOGE(TAG, "Buffer trop petit pour client cert");
+        medbox_log_error(MEDBOX_ERR_SYS_NO_MEMORY, TAG, "client cert buffer");
         return ESP_ERR_NO_MEM;
     }
 
@@ -171,13 +172,13 @@ esp_err_t secure_storage_set_client_key(const char *key, size_t len)
 
     esp_err_t ret = nvs_set_blob(nvs_certs_handle, NVS_KEY_CLIENT_KEY, key, len);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Erreur écriture client key: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_NVS_WRITE_FAILED, TAG, "client key");
         return ret;
     }
 
     ret = nvs_commit(nvs_certs_handle);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Erreur commit client key: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_NVS_WRITE_FAILED, TAG, "client key commit");
         return ret;
     }
 
@@ -204,7 +205,7 @@ esp_err_t secure_storage_get_client_key(char *key, size_t max_len, size_t *out_l
     }
 
     if (required_size > max_len) {
-        ESP_LOGE(TAG, "Buffer trop petit pour client key");
+        medbox_log_error(MEDBOX_ERR_SYS_NO_MEMORY, TAG, "client key buffer");
         return ESP_ERR_NO_MEM;
     }
 
@@ -228,13 +229,13 @@ esp_err_t secure_storage_set_medbox_uuid(const char *uuid)
 
     esp_err_t ret = nvs_set_str(nvs_config_handle, NVS_KEY_MEDBOX_UUID, uuid);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Erreur écriture UUID: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_NVS_WRITE_FAILED, TAG, "UUID");
         return ret;
     }
 
     ret = nvs_commit(nvs_config_handle);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Erreur commit UUID: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_NVS_WRITE_FAILED, TAG, "UUID commit");
         return ret;
     }
 
@@ -338,13 +339,13 @@ esp_err_t secure_storage_erase_all(void)
 
     esp_err_t ret = nvs_erase_all(nvs_certs_handle);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Erreur effacement certs: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_NVS_WRITE_FAILED, TAG, "erase certs");
         return ret;
     }
 
     ret = nvs_erase_all(nvs_config_handle);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Erreur effacement config: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_NVS_WRITE_FAILED, TAG, "erase config");
         return ret;
     }
 

@@ -5,6 +5,7 @@
 #include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "error_manager.h"
 #include <string.h>
 
 static const char *TAG = "wifi_manager";
@@ -38,7 +39,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
             notify_state_change(WIFI_STATE_CONNECTING);
         } else {
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
-            ESP_LOGE(TAG, "Échec connexion WiFi après %d tentatives", WIFI_MAX_RETRY);
+            medbox_log_error(MEDBOX_ERR_WIFI_MAX_RETRY, TAG, NULL);
             notify_state_change(WIFI_STATE_FAILED);
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
@@ -59,7 +60,7 @@ esp_err_t wifi_manager_init(void)
 
     s_wifi_event_group = xEventGroupCreate();
     if (s_wifi_event_group == NULL) {
-        ESP_LOGE(TAG, "Échec création event group");
+        medbox_log_error(MEDBOX_ERR_SYS_NO_MEMORY, TAG, "event_group");
         return ESP_ERR_NO_MEM;
     }
 
@@ -85,7 +86,7 @@ esp_err_t wifi_manager_init(void)
 esp_err_t wifi_manager_connect(const char *ssid, const char *password)
 {
     if (!s_initialized) {
-        ESP_LOGE(TAG, "WiFi Manager non initialisé");
+        medbox_log_error(MEDBOX_ERR_WIFI_NOT_INIT, TAG, NULL);
         return ESP_ERR_INVALID_STATE;
     }
 

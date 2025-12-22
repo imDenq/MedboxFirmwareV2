@@ -5,6 +5,7 @@
 #include "esp_tls.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "error_manager.h"
 #include "sdkconfig.h"
 #include <string.h>
 
@@ -101,14 +102,18 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             break;
 
         case MQTT_EVENT_ERROR:
-            ESP_LOGE(TAG, "Erreur MQTT");
             if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
-                ESP_LOGE(TAG, "Transport error: esp_tls_last_esp_err=0x%x",
-                         event->error_handle->esp_tls_last_esp_err);
-                ESP_LOGE(TAG, "Transport error: tls_stack_err=0x%x",
-                         event->error_handle->esp_tls_stack_err);
-                ESP_LOGE(TAG, "Transport error: socket_errno=%d",
+                if (event->error_handle->esp_tls_last_esp_err != 0) {
+                    medbox_log_error(MEDBOX_ERR_MQTT_TLS_HANDSHAKE_FAILED, TAG, "TLS error");
+                } else {
+                    medbox_log_error(MEDBOX_ERR_MQTT_BROKER_UNREACHABLE, TAG, "Transport error");
+                }
+                ESP_LOGE(TAG, "  esp_tls_err=0x%x, tls_stack=0x%x, sock_errno=%d",
+                         event->error_handle->esp_tls_last_esp_err,
+                         event->error_handle->esp_tls_stack_err,
                          event->error_handle->esp_transport_sock_errno);
+            } else {
+                medbox_log_error(MEDBOX_ERR_MQTT_CONNECT_FAILED, TAG, NULL);
             }
             notify_state_change(MQTT_STATE_ERROR);
             break;
@@ -148,7 +153,7 @@ static esp_err_t load_certificates(bool use_tls, bool use_client_cert)
     memset(s_ca_cert, 0, sizeof(s_ca_cert));
     ret = secure_storage_get_ca_cert(s_ca_cert, sizeof(s_ca_cert), &len);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Impossible de charger le certificat CA: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_CERT_CA_LOAD_FAILED, TAG, esp_err_to_name(ret));
         return ret;
     }
     ESP_LOGI(TAG, "Certificat CA chargé (%d bytes)", len);
@@ -158,7 +163,7 @@ static esp_err_t load_certificates(bool use_tls, bool use_client_cert)
         memset(s_client_cert, 0, sizeof(s_client_cert));
         ret = secure_storage_get_client_cert(s_client_cert, sizeof(s_client_cert), &len);
         if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Impossible de charger le certificat client: %s", esp_err_to_name(ret));
+            medbox_log_error(MEDBOX_ERR_CERT_CLIENT_LOAD_FAILED, TAG, esp_err_to_name(ret));
             return ret;
         }
         ESP_LOGI(TAG, "Certificat client chargé (%d bytes)", len);
@@ -167,7 +172,7 @@ static esp_err_t load_certificates(bool use_tls, bool use_client_cert)
         memset(s_client_key, 0, sizeof(s_client_key));
         ret = secure_storage_get_client_key(s_client_key, sizeof(s_client_key), &len);
         if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Impossible de charger la clé privée: %s", esp_err_to_name(ret));
+            medbox_log_error(MEDBOX_ERR_CERT_KEY_LOAD_FAILED, TAG, esp_err_to_name(ret));
             return ret;
         }
         ESP_LOGI(TAG, "Clé privée chargée (%d bytes)", len);
@@ -192,14 +197,14 @@ esp_err_t mqtt_client_medbox_init(const mqtt_client_config_t *config)
     // Créer le groupe d'événements
     s_mqtt_event_group = xEventGroupCreate();
     if (s_mqtt_event_group == NULL) {
-        ESP_LOGE(TAG, "Échec création event group");
+        medbox_log_error(MEDBOX_ERR_SYS_NO_MEMORY, TAG, "event_group");
         return ESP_ERR_NO_MEM;
     }
 
     // Charger les certificats si TLS activé
     esp_err_t ret = load_certificates(config->use_tls, config->use_client_cert);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Échec chargement certificats");
+        medbox_log_error(MEDBOX_ERR_CERT_CA_LOAD_FAILED, TAG, "TLS certs");
         vEventGroupDelete(s_mqtt_event_group);
         s_mqtt_event_group = NULL;
         return ret;
@@ -256,7 +261,7 @@ esp_err_t mqtt_client_medbox_init(const mqtt_client_config_t *config)
     // Créer le client
     s_mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
     if (s_mqtt_client == NULL) {
-        ESP_LOGE(TAG, "Échec initialisation client MQTT");
+        medbox_log_error(MEDBOX_ERR_MQTT_INIT_FAILED, TAG, "esp_mqtt_client_init");
         vEventGroupDelete(s_mqtt_event_group);
         s_mqtt_event_group = NULL;
         return ESP_FAIL;
@@ -266,7 +271,7 @@ esp_err_t mqtt_client_medbox_init(const mqtt_client_config_t *config)
     ret = esp_mqtt_client_register_event(s_mqtt_client, ESP_EVENT_ANY_ID,
                                          mqtt_event_handler, NULL);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Échec enregistrement handler: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_MQTT_INIT_FAILED, TAG, esp_err_to_name(ret));
         esp_mqtt_client_destroy(s_mqtt_client);
         s_mqtt_client = NULL;
         vEventGroupDelete(s_mqtt_event_group);
@@ -300,7 +305,7 @@ esp_err_t mqtt_client_medbox_start(void)
         s_client_started = true;
         notify_state_change(MQTT_STATE_CONNECTING);
     } else {
-        ESP_LOGE(TAG, "Échec démarrage client MQTT: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_MQTT_CONNECT_FAILED, TAG, esp_err_to_name(ret));
     }
     return ret;
 }
@@ -327,7 +332,7 @@ int mqtt_client_medbox_publish(const char *topic, const char *data, size_t len, 
 
     int msg_id = esp_mqtt_client_publish(s_mqtt_client, topic, data, len, qos, retain ? 1 : 0);
     if (msg_id < 0) {
-        ESP_LOGE(TAG, "Échec publication sur %s", topic);
+        medbox_log_error(MEDBOX_ERR_MQTT_PUBLISH_FAILED, TAG, topic);
     } else {
         ESP_LOGD(TAG, "Publié sur %s (msg_id=%d, qos=%d)", topic, msg_id, qos);
     }
@@ -342,7 +347,7 @@ int mqtt_client_medbox_subscribe(const char *topic, int qos)
 
     int msg_id = esp_mqtt_client_subscribe(s_mqtt_client, topic, qos);
     if (msg_id < 0) {
-        ESP_LOGE(TAG, "Échec abonnement à %s", topic);
+        medbox_log_error(MEDBOX_ERR_MQTT_SUBSCRIBE_FAILED, TAG, topic);
     } else {
         ESP_LOGI(TAG, "Abonnement à %s (msg_id=%d, qos=%d)", topic, msg_id, qos);
     }

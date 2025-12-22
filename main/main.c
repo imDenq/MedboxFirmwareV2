@@ -11,6 +11,7 @@
 #include "secure_storage.h"
 #include "wifi_manager.h"
 #include "mqtt_client_medbox.h"
+#include "error_manager.h"
 
 static const char *TAG = "medbox_main";
 
@@ -223,14 +224,14 @@ static void mqtt_task(void *pvParameters)
     // Initialiser et démarrer le client MQTT
     esp_err_t ret = mqtt_client_medbox_init(&mqtt_config);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Échec initialisation MQTT: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_MQTT_INIT_FAILED, TAG, esp_err_to_name(ret));
         vTaskDelete(NULL);
         return;
     }
 
     ret = mqtt_client_medbox_start();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Échec démarrage MQTT: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_MQTT_CONNECT_FAILED, TAG, esp_err_to_name(ret));
         vTaskDelete(NULL);
         return;
     }
@@ -311,10 +312,13 @@ void app_main(void)
     ESP_LOGI(TAG, "    ESP-IDF: %s", esp_get_idf_version());
     ESP_LOGI(TAG, "===========================================");
 
+    // Initialiser le gestionnaire d'erreurs
+    error_manager_init();
+
     // Initialiser le stockage sécurisé
     esp_err_t ret = secure_storage_init();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Échec initialisation stockage: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_NVS_INIT_FAILED, TAG, esp_err_to_name(ret));
         return;
     }
 
@@ -329,15 +333,14 @@ void app_main(void)
 
     // Vérifier si l'appareil est provisionné
     if (!secure_storage_uuid_provisioned()) {
-        ESP_LOGE(TAG, "UUID non provisionné!");
-        ESP_LOGE(TAG, "Activez CONFIG_MEDBOX_PROVISIONING_MODE et provisionnez l'appareil.");
+        medbox_log_error(MEDBOX_ERR_UUID_NOT_PROVISIONED, TAG, "Activez CONFIG_MEDBOX_PROVISIONING_MODE");
         return;
     }
 
     // Récupérer l'UUID
     ret = secure_storage_get_medbox_uuid(medbox_uuid, sizeof(medbox_uuid));
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Impossible de lire l'UUID: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_NVS_READ_FAILED, TAG, "UUID");
         return;
     }
     ESP_LOGI(TAG, "UUID Medbox: %s", medbox_uuid);
@@ -345,8 +348,7 @@ void app_main(void)
     #if CONFIG_MEDBOX_MQTT_USE_TLS
     // Vérifier si les certificats sont provisionnés
     if (!secure_storage_certs_provisioned()) {
-        ESP_LOGE(TAG, "Certificats non provisionnés!");
-        ESP_LOGE(TAG, "Activez CONFIG_MEDBOX_PROVISIONING_MODE et provisionnez les certificats.");
+        medbox_log_error(MEDBOX_ERR_CERT_NOT_PROVISIONED, TAG, "Activez CONFIG_MEDBOX_PROVISIONING_MODE");
         return;
     }
     ESP_LOGI(TAG, "Certificats TLS trouvés dans NVS");
@@ -378,14 +380,14 @@ void app_main(void)
     // Créer la queue pour les messages MQTT
     mqtt_rx_queue = xQueueCreate(10, sizeof(mqtt_message_t));
     if (mqtt_rx_queue == NULL) {
-        ESP_LOGE(TAG, "Échec création queue MQTT");
+        medbox_log_error(MEDBOX_ERR_SYS_QUEUE_CREATE_FAILED, TAG, "mqtt_rx_queue");
         return;
     }
 
     // Initialiser le WiFi Manager
     ret = wifi_manager_init();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Échec initialisation WiFi: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_WIFI_INIT_FAILED, TAG, esp_err_to_name(ret));
         return;
     }
 
@@ -395,14 +397,14 @@ void app_main(void)
     ESP_LOGI(TAG, "Connexion au WiFi: %s", CONFIG_MEDBOX_WIFI_SSID);
     ret = wifi_manager_connect(CONFIG_MEDBOX_WIFI_SSID, CONFIG_MEDBOX_WIFI_PASSWORD);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Échec démarrage WiFi: %s", esp_err_to_name(ret));
+        medbox_log_error(MEDBOX_ERR_WIFI_CONNECT_FAILED, TAG, esp_err_to_name(ret));
         return;
     }
 
     // Attendre la connexion WiFi (timeout 30s)
     ret = wifi_manager_wait_connected(30000);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Timeout connexion WiFi");
+        medbox_log_error(MEDBOX_ERR_WIFI_CONNECT_TIMEOUT, TAG, "30s");
         return;
     }
 
@@ -415,13 +417,13 @@ void app_main(void)
 
     task_ret = xTaskCreate(mqtt_task, "mqtt_task", 8192, NULL, 5, NULL);
     if (task_ret != pdPASS) {
-        ESP_LOGE(TAG, "Échec création tâche MQTT");
+        medbox_log_error(MEDBOX_ERR_SYS_TASK_CREATE_FAILED, TAG, "mqtt_task");
         return;
     }
 
     task_ret = xTaskCreate(main_task, "main_task", 4096, NULL, 4, NULL);
     if (task_ret != pdPASS) {
-        ESP_LOGE(TAG, "Échec création tâche principale");
+        medbox_log_error(MEDBOX_ERR_SYS_TASK_CREATE_FAILED, TAG, "main_task");
         return;
     }
 
