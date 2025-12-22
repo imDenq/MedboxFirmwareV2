@@ -1,0 +1,107 @@
+menu "Medbox Configuration"
+
+    menu "WiFi Configuration"
+        config MEDBOX_WIFI_SSID
+            string "WiFi SSID"
+            default "CPL_DENQ"
+            help
+                SSID du réseau WiFi.
+
+        config MEDBOX_WIFI_PASSWORD
+            string "WiFi Password"
+            default "AZoote51420&"
+            help
+                Mot de passe du réseau WiFi.
+    endmenu
+
+    menu "MQTT Configuration"
+        config MEDBOX_MQTT_BROKER_IP
+            string "MQTT Broker IP"
+            default "185.157.245.46"
+            help
+                Adresse IP du broker MQTT EMQX.
+
+        config MEDBOX_MQTT_BROKER_PORT
+            int "MQTT Broker Port"
+            default 1883
+            help
+                Port du broker MQTT (1883 pour TCP, 8883 pour TLS).
+
+        config MEDBOX_MQTT_USE_TLS
+            bool "Utiliser TLS"
+            default n
+            help
+                Activer la connexion TLS/SSL au broker MQTT.
+
+        config MEDBOX_MQTT_VERIFY_SERVER
+            bool "Vérifier le certificat serveur"
+            default y
+            depends on MEDBOX_MQTT_USE_TLS
+            help
+                Vérifier le certificat du serveur (recommandé en production).
+
+        config MEDBOX_MQTT_USE_CLIENT_CERT
+            bool "Utiliser certificat client (mTLS)"
+            default y
+            depends on MEDBOX_MQTT_USE_TLS
+            help
+                Utiliser l'authentification par certificat client (mTLS).
+
+        config MEDBOX_MQTT_USERNAME
+            string "MQTT Username"
+            default ""
+            help
+                Nom d'utilisateur MQTT (optionnel si mTLS activé).
+
+        config MEDBOX_MQTT_PASSWORD
+            string "MQTT Password"
+            default ""
+            help
+                Mot de passe MQTT (optionnel si mTLS activé).
+
+        config MEDBOX_MQTT_TOPIC_BASE
+            string "Topic de base"
+            default "medbox"
+            help
+                Topic de base pour la Medbox (ex: medbox/{uuid}/...).
+    endmenu
+
+    menu "Security Configuration"
+        config MEDBOX_DEV_MODE
+            bool "Mode Developpement (UUID de test)"
+            default y
+            help
+                Utilise un UUID de test hardcode pour le developpement.
+                DESACTIVER en production!
+
+        config MEDBOX_DEV_UUID
+            string "UUID de test"
+            default "medbox-dev-001"
+            depends on MEDBOX_DEV_MODE
+            help
+                UUID utilise en mode developpement.
+
+        config MEDBOX_PROVISIONING_MODE
+            bool "Mode Provisioning"
+            default n
+            depends on !MEDBOX_DEV_MODE
+            help
+                Active le mode provisioning pour injecter les certificats
+                et l'UUID via le port série. DÉSACTIVER en production!
+
+        config MEDBOX_ENABLE_SECURE_BOOT
+            bool "Activer Secure Boot"
+            default n
+            help
+                Active le Secure Boot ESP32. ATTENTION: irréversible une fois
+                les efuses programmés!
+
+        config MEDBOX_ENABLE_FLASH_ENCRYPTION
+            bool "Activer Flash Encryption"
+            default n
+            help
+                Active le chiffrement de la flash. ATTENTION: irréversible
+                en mode RELEASE!
+    endmenu
+
+endmenu

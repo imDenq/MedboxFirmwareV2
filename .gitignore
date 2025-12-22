@@ -1,0 +1,124 @@
+# ===========================================
+# Medbox Firmware - Git Ignore
+# ===========================================
+
+# -------------------------------------------
+# SECURITY - CRITICAL (never commit these!)
+# -------------------------------------------
+
+# Encryption and signing keys
+keys/
+*.pem
+*.bin
+!partitions.csv
+
+# TLS Certificates
+certs/
+*.crt
+*.key
+*.csr
+*.p12
+*.pfx
+
+# NVS images (may contain secrets)
+nvs_*.bin
+*.nvs
+
+# -------------------------------------------
+# ESP-IDF Build artifacts
+# -------------------------------------------
+build/
+sdkconfig
+sdkconfig.old
+*.old
+
+# Managed components
+managed_components/
+
+# -------------------------------------------
+# Development & IDE
+# -------------------------------------------
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# CLion / JetBrains
+.idea/
+cmake-build-*/
+*.iml
+
+# Eclipse
+.project
+.cproject
+.settings/
+
+# Clangd
+.clangd
+.cache/
+compile_commands.json
+
+# -------------------------------------------
+# Python
+# -------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.env
+*.egg-info/
+
+# -------------------------------------------
+# OS Generated
+# -------------------------------------------
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.lnk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux
+*~
+.directory
+
+# -------------------------------------------
+# Logs and temp files
+# -------------------------------------------
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+*.bak
+
+# -------------------------------------------
+# Archives (may contain secrets)
+# -------------------------------------------
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.rar
+
+# -------------------------------------------
+# Project specific
+# -------------------------------------------
+
+# Delete folder (cleanup)
+delete/
+
+# Claude Code
+.claude/
+
+# Local config overrides
+local.mk
+local_config.h

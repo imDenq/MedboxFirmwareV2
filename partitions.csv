@@ -1,0 +1,7 @@
+# Medbox Partition Table (Secure Boot + Flash Encryption)
+# Partition table offset: 0x10000 (to allow larger bootloader)
+# Name,       Type, SubType,  Offset,   Size,     Flags
+nvs,          data, nvs,      0x11000,  0x4000,
+nvs_keys,     data, nvs_keys, 0x15000,  0x1000,   encrypted
+phy_init,     data, phy,      0x16000,  0x1000,
+factory,      app,  factory,  0x20000,  0x1E0000, encrypted
