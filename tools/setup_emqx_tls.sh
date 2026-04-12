@@ -28,7 +28,7 @@ openssl genrsa -out "$SERVER_DIR/server.key" 2048
 # CSR serveur
 openssl req -new -key "$SERVER_DIR/server.key" \
     -out "$SERVER_DIR/server.csr" \
-    -subj "/C=FR/ST=France/L=Paris/O=Medbox/OU=Server/CN=185.157.245.46"
+    -subj "/C=FR/ST=France/L=Paris/O=Medbox/OU=Server/CN=mqtt.medbox.theokaszak.fr"
 
 # Configuration pour les extensions serveur
 cat > "$SERVER_DIR/server_ext.cnf" << EOF
@@ -45,7 +45,7 @@ extendedKeyUsage = serverAuth
 subjectAltName = @alt_names
 
 [alt_names]
-IP.1 = 185.157.245.46
+IP.1 = mqtt.medbox.theokaszak.fr
 DNS.1 = localhost
 EOF
 
@@ -66,11 +66,11 @@ echo ""
 echo "=== Configuration EMQX ==="
 echo ""
 echo "1. Copier les certificats vers le serveur EMQX:"
-echo "   scp $CA_DIR/ca.crt user@185.157.245.46:$EMQX_CERTS_DIR/"
-echo "   scp $SERVER_DIR/server.crt user@185.157.245.46:$EMQX_CERTS_DIR/"
-echo "   scp $SERVER_DIR/server.key user@185.157.245.46:$EMQX_CERTS_DIR/"
+echo "   scp $CA_DIR/ca.crt user@mqtt.medbox.theokaszak.fr:$EMQX_CERTS_DIR/"
+echo "   scp $SERVER_DIR/server.crt user@mqtt.medbox.theokaszak.fr:$EMQX_CERTS_DIR/"
+echo "   scp $SERVER_DIR/server.key user@mqtt.medbox.theokaszak.fr:$EMQX_CERTS_DIR/"
 echo ""
-echo "2. Configurer EMQX via le Dashboard (http://185.157.245.46:18083):"
+echo "2. Configurer EMQX via le Dashboard (http://mqtt.medbox.theokaszak.fr:18083):"
 echo "   - Aller dans 'Authentication' > 'TLS/SSL'"
 echo "   - Ou modifier le fichier emqx.conf:"
 echo ""
@@ -93,4 +93,4 @@ echo "3. Redémarrer EMQX:"
 echo "   docker restart emqx"
 echo ""
 echo "4. Tester la connexion TLS:"
-echo "   openssl s_client -connect 185.157.245.46:8883 -CAfile $CA_DIR/ca.crt"
+echo "   openssl s_client -connect mqtt.medbox.theokaszak.fr:8883 -CAfile $CA_DIR/ca.crt"

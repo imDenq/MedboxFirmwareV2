@@ -16,10 +16,10 @@ menu "Medbox Configuration"
 
     menu "MQTT Configuration"
         config MEDBOX_MQTT_BROKER_IP
-            string "MQTT Broker IP"
-            default "185.157.245.46"
+            string "MQTT Broker Host"
+            default "mqtt.medbox.theokaszak.fr"
             help
-                Adresse IP du broker MQTT EMQX.
+                Adresse du broker MQTT EMQX (IP ou nom de domaine).
 
         config MEDBOX_MQTT_BROKER_PORT
             int "MQTT Broker Port"

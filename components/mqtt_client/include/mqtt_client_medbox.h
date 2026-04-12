@@ -42,7 +42,7 @@ typedef void (*mqtt_state_callback_t)(mqtt_client_state_t state);
 
 // Configuration du client MQTT
 typedef struct {
-    const char *broker_uri;          // URI du broker (ex: "mqtts://185.157.245.46:8883")
+    const char *broker_uri;          // URI du broker (ex: "mqtts://mqtt.medbox.theokaszak.fr:8883")
     const char *client_id;           // ID du client (utiliser UUID Medbox)
     const char *username;            // Username (optionnel)
     const char *password;            // Password (optionnel)

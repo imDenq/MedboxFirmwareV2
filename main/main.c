@@ -34,6 +34,9 @@ static char topic_evt_heartbeat[160];
 static char topic_evt_wheel_inserted[160];
 static char topic_evt_dispense_confirmed[160];
 
+// Topic de télémétrie (niveau box, pas sous /evt)
+static char topic_telemetry[160];
+
 // UUID de la Medbox
 static char medbox_uuid[MEDBOX_UUID_MAX_LEN];
 
@@ -46,6 +49,7 @@ static uint8_t battery_level = 100;
 // Prototypes des tâches
 static void mqtt_task(void *pvParameters);
 static void main_task(void *pvParameters);
+static void send_telemetry(void);
 
 // Callback pour les messages MQTT reçus
 static void on_mqtt_message(const mqtt_message_t *message)
@@ -77,11 +81,12 @@ static void on_mqtt_state_change(mqtt_client_state_t state)
     ESP_LOGI(TAG, "État MQTT: %s", state_str[state]);
 
     if (state == MQTT_STATE_CONNECTED) {
-        // S'abonner aux topics de commandes (QoS 2 pour commandes critiques)
-        mqtt_client_medbox_subscribe(topic_cmd_subscribe, 2);
+        // S'abonner aux topics de commandes (QoS 1)
+        mqtt_client_medbox_subscribe(topic_cmd_subscribe, 1);
 
-        // Envoyer un heartbeat initial
-        ESP_LOGI(TAG, "Envoi heartbeat initial...");
+        // Envoyer la télémétrie initiale
+        ESP_LOGI(TAG, "Envoi télémétrie initiale...");
+        send_telemetry();
     }
 }
 
@@ -109,6 +114,28 @@ static void send_heartbeat(void)
                                              strlen(heartbeat_json), 0, false);
     if (msg_id >= 0) {
         ESP_LOGI(TAG, "Heartbeat envoyé");
+    }
+}
+
+// Envoie la télémétrie au backend (topic: medbox/box/{UUID}/telemetry)
+static void send_telemetry(void)
+{
+    if (!mqtt_client_medbox_is_connected()) return;
+
+    // TODO: Récupérer la vraie date via SNTP
+    char telemetry_json[256];
+    snprintf(telemetry_json, sizeof(telemetry_json),
+             "{"
+             "\"firmware_version\":\"%s\","
+             "\"last_sync\":\"2026-04-03T08:00:00Z\","
+             "\"current_date\":\"2026-04-03T20:55:00Z\""
+             "}",
+             FIRMWARE_VERSION);
+
+    int msg_id = mqtt_client_medbox_publish(topic_telemetry, telemetry_json,
+                                             strlen(telemetry_json), 1, false);
+    if (msg_id >= 0) {
+        ESP_LOGI(TAG, "Télémétrie envoyée");
     }
 }
 
@@ -274,8 +301,8 @@ static void main_task(void *pvParameters)
     ESP_LOGI(TAG, "Démarrage tâche principale");
 
     mqtt_message_t rx_message;
-    TickType_t last_heartbeat = 0;
-    const TickType_t heartbeat_interval = pdMS_TO_TICKS(30000);  // 30 secondes
+    TickType_t last_telemetry = 0;
+    const TickType_t telemetry_interval = pdMS_TO_TICKS(60000);  // 60 secondes
 
     while (1) {
         // Traiter les messages MQTT reçus (commandes)
@@ -291,13 +318,13 @@ static void main_task(void *pvParameters)
             }
         }
 
-        // Envoyer le heartbeat périodiquement (QoS 0)
+        // Envoyer la télémétrie périodiquement (QoS 1)
         TickType_t now = xTaskGetTickCount();
         if (mqtt_client_medbox_is_connected() &&
-            (now - last_heartbeat) >= heartbeat_interval) {
+            (now - last_telemetry) >= telemetry_interval) {
 
-            last_heartbeat = now;
-            send_heartbeat();
+            last_telemetry = now;
+            send_telemetry();
         }
     }
 }
@@ -381,7 +408,7 @@ void app_main(void)
     snprintf(topic_base_cmd, sizeof(topic_base_cmd),
              "%s/%s/cmd", CONFIG_MEDBOX_MQTT_TOPIC_BASE, medbox_uuid);
     snprintf(topic_cmd_subscribe, sizeof(topic_cmd_subscribe),
-             "%s/#", topic_base_cmd);
+             "%s/+", topic_base_cmd);
 
     // Topics d'événements spécifiques
     snprintf(topic_evt_heartbeat, sizeof(topic_evt_heartbeat),
@@ -391,9 +418,14 @@ void app_main(void)
     snprintf(topic_evt_dispense_confirmed, sizeof(topic_evt_dispense_confirmed),
              "%s/dispense_confirmed", topic_base_evt);
 
+    // Topic de télémétrie (au niveau box, pas sous /evt)
+    snprintf(topic_telemetry, sizeof(topic_telemetry),
+             "%s/%s/telemetry", CONFIG_MEDBOX_MQTT_TOPIC_BASE, medbox_uuid);
+
     ESP_LOGI(TAG, "Topics MQTT configurés:");
     ESP_LOGI(TAG, "  Events base:   %s", topic_base_evt);
     ESP_LOGI(TAG, "  Commands sub:  %s", topic_cmd_subscribe);
+    ESP_LOGI(TAG, "  Telemetry:     %s", topic_telemetry);
     ESP_LOGI(TAG, "  Heartbeat:     %s", topic_evt_heartbeat);
 
     // Créer la queue pour les messages MQTT

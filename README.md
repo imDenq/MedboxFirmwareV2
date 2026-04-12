@@ -200,7 +200,7 @@ sdkconfig                # Peut contenir des secrets WiFi
 Le broker EMQX est configuré dans `sdkconfig.defaults`:
 
 ```
-Broker: 185.157.245.46
+Broker: mqtt.medbox.theokaszak.fr
 Port: 8883 (TLS)
 Topic base: medbox/box
 ```

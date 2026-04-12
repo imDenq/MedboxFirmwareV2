@@ -30,7 +30,8 @@ Le firmware Medbox est une application ESP32 basée sur ESP-IDF v5.5.1 qui commu
           ▼                                    ▼
 ┌─────────────────────┐              ┌─────────────────────┐
 │    Broker EMQX      │              │  Interface Web      │
-│  185.157.245.46     │              │  (Configuration)    │
+│  mqtt.medbox.       │              │  (Configuration)    │
+│  theokaszak.fr      │              │                     │
 └─────────────────────┘              └─────────────────────┘
 ```
 
@@ -329,17 +330,15 @@ Voir [ERRORS.md](ERRORS.md) pour la liste complète des codes.
 
 | Topic | Direction | QoS | Description |
 |-------|-----------|-----|-------------|
-| `medbox/{uuid}/commands` | Subscribe | 1 | Commandes reçues du serveur |
-| `medbox/{uuid}/status` | Publish | 1 | État de la Medbox |
-| `medbox/{uuid}/telemetry` | Publish | 0 | Données périodiques (30s) |
+| `medbox/box/{uuid}/cmd/+` | Subscribe | 1 | Commandes reçues du serveur |
+| `medbox/box/{uuid}/telemetry` | Publish | 1 | Télémétrie périodique (60s) |
 
 **Format de la télémétrie** (JSON):
 ```json
 {
-    "uuid": "945c1ffc-3801-4af1-bb51-bb1e1710abb1",
-    "uptime": 307,
-    "heap_free": 245678,
-    "rssi": -66
+    "firmware_version": "1.0.0",
+    "last_sync": "2026-04-03T08:00:00Z",
+    "current_date": "2026-04-03T20:55:00Z"
 }
 ```
 
@@ -360,7 +359,7 @@ Accessible via `idf.py menuconfig` ou `menuconfig.bat`.
 #### MQTT Configuration
 | Option | Type | Défaut | Description |
 |--------|------|--------|-------------|
-| `MEDBOX_MQTT_BROKER_IP` | string | "185.157.245.46" | IP du broker |
+| `MEDBOX_MQTT_BROKER_IP` | string | "mqtt.medbox.theokaszak.fr" | Hôte du broker |
 | `MEDBOX_MQTT_BROKER_PORT` | int | 8883 | Port TLS |
 | `MEDBOX_MQTT_USE_TLS` | bool | y | Activer TLS |
 | `MEDBOX_MQTT_VERIFY_SERVER` | bool | y | Vérifier cert serveur |
@@ -371,7 +370,7 @@ Accessible via `idf.py menuconfig` ou `menuconfig.bat`.
 | Option | Type | Défaut | Description |
 |--------|------|--------|-------------|
 | `MEDBOX_DEV_MODE` | bool | y | Mode développement |
-| `MEDBOX_DEV_UUID` | string | "945c1ffc-..." | UUID de dev |
+| `MEDBOX_DEV_UUID` | string | "b9c8d7e6-..." | UUID de dev |
 | `MEDBOX_PROVISIONING_MODE` | bool | n | Mode provisioning |
 
 ---
