@@ -332,7 +332,7 @@ static void main_task(void *pvParameters)
 
     mqtt_message_t rx_message;
     TickType_t last_telemetry = 0;
-    const TickType_t telemetry_interval = pdMS_TO_TICKS(60000);  // 60 secondes
+    const TickType_t telemetry_interval = pdMS_TO_TICKS(20000);  // 20 secondes
 
     while (1) {
         // Traiter les messages MQTT reçus (commandes)
