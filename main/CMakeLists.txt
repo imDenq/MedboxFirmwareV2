@@ -9,5 +9,6 @@ idf_component_register(
         wifi_manager
         mqtt_client
         web_server
+        motor
         json
 )

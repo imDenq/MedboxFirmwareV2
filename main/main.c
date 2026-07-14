@@ -18,6 +18,7 @@
 #include "error_manager.h"
 #include "web_server.h"
 #include "boot_ui.h"
+#include "motor.h"
 #include "cJSON.h"
 
 static const char *TAG = "medbox_main";
@@ -283,6 +284,20 @@ static void process_command(const char *topic, const char *payload, size_t len)
         // Synchronisation de l'horloge (heure serveur)
         ESP_LOGI(TAG, "Commande SYNC_TIME reçue");
         handle_sync_time(payload, len);
+
+    } else if (strcmp(cmd_type, "test_distribution") == 0) {
+        // Test de distribution : fait tourner la roue sur N jours (defaut 7)
+        ESP_LOGI(TAG, "Commande TEST_DISTRIBUTION reçue");
+        int days = 7;
+        cJSON *root = cJSON_ParseWithLength(payload, len);
+        if (root != NULL) {
+            const cJSON *d = cJSON_GetObjectItemCaseSensitive(root, "days");
+            if (cJSON_IsNumber(d) && d->valueint > 0) {
+                days = d->valueint;
+            }
+            cJSON_Delete(root);
+        }
+        motor_start_test(days);
 
     } else {
         ESP_LOGW(TAG, "Commande inconnue: %s", cmd_type);
@@ -611,6 +626,10 @@ void app_main(void)
     boot_ui_section("Services");
     ret = web_server_start();
     boot_ui_step("Serveur web (port 80)", ret == ESP_OK);
+
+    // Moteur de distribution (reste desactive au repos)
+    motor_init();
+    boot_ui_step("Moteur de distribution", true);
 
     // Taches FreeRTOS
     BaseType_t task_ret = xTaskCreate(mqtt_task, "mqtt_task", 8192, NULL, 5, NULL);
