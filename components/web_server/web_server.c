@@ -4,6 +4,7 @@
  */
 
 #include "web_server.h"
+#include "console_ws.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "wifi_manager.h"
@@ -56,6 +57,12 @@ esp_err_t web_server_start(void)
         httpd_stop(s_server);
         s_server = NULL;
         return ret;
+    }
+
+    // Console live via WebSocket (/console) — debug/test, non bloquant si echec
+    console_ws_start();
+    if (console_ws_register(s_server) != ESP_OK) {
+        ESP_LOGW(TAG, "Console WebSocket non enregistree");
     }
 
     ESP_LOGI(TAG, "Serveur HTTP demarre avec succes");
