@@ -149,7 +149,17 @@ static void send_telemetry(void)
     // Uptime en secondes
     uint32_t uptime_s = xTaskGetTickCount() * portTICK_PERIOD_MS / 1000;
 
-    // TODO: Récupérer la vraie date via SNTP
+    // Date courante depuis l'horloge systeme (UTC ISO 8601). Avant synchro
+    // l'horloge est a 1970 -> le backend detecte la derive et envoie sync_time ;
+    // une fois synchro, la derive tombe a ~0 et le backend arrete d'en envoyer.
+    char current_date[32] = "1970-01-01T00:00:00Z";
+    time_t now_ts = time(NULL);
+    if (now_ts > 1600000000) {
+        struct tm ti;
+        gmtime_r(&now_ts, &ti);
+        strftime(current_date, sizeof(current_date), "%Y-%m-%dT%H:%M:%SZ", &ti);
+    }
+
     char telemetry_json[384];
     snprintf(telemetry_json, sizeof(telemetry_json),
              "{"
@@ -159,11 +169,10 @@ static void send_telemetry(void)
              "\"rssi\":%d,"
              "\"uptime_s\":%lu,"
              "\"battery_level\":%d,"
-             "\"last_sync\":\"2026-04-03T08:00:00Z\","
-             "\"current_date\":\"2026-04-03T20:55:00Z\""
+             "\"current_date\":\"%s\""
              "}",
              FIRMWARE_VERSION, mac_str, ip_str, rssi,
-             (unsigned long)uptime_s, battery_level);
+             (unsigned long)uptime_s, battery_level, current_date);
 
     int msg_id = mqtt_client_medbox_publish(topic_telemetry, telemetry_json,
                                              strlen(telemetry_json), 1, false);
