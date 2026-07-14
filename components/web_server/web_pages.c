@@ -512,6 +512,10 @@ static const char INDEX_HTML[] = R"rawliteral(
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
                 Journal
             </button>
+            <button class="tab" onclick="showPage('console',this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                Console
+            </button>
         </div>
     </div>
 
@@ -627,6 +631,19 @@ static const char INDEX_HTML[] = R"rawliteral(
                 Actualiser
             </button>
         </div>
+
+        <!-- ========== CONSOLE PAGE ========== -->
+        <div id="console" class="page">
+            <div class="card">
+                <div class="card-head">
+                    <div class="card-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                    </div>
+                    <div class="card-title">Console live <span id="console-status" style="font-weight:400;color:#8a94a6;font-size:12px;margin-left:6px;">(deconnecte)</span></div>
+                </div>
+                <div id="console-log" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.5;background:#0b0f14;color:#c8d6e5;padding:12px 14px;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word;"></div>
+            </div>
+        </div>
     </div>
 
     <!-- FOOTER -->
@@ -635,6 +652,23 @@ static const char INDEX_HTML[] = R"rawliteral(
     </div>
 
     <script>
+        var consoleWS = null;
+        function connectConsole() {
+            if (consoleWS && (consoleWS.readyState === 0 || consoleWS.readyState === 1)) return;
+            var log = document.getElementById('console-log');
+            var st = document.getElementById('console-status');
+            consoleWS = new WebSocket('ws://' + location.host + '/ws/console');
+            consoleWS.onopen = function() { st.textContent = '(connecte)'; };
+            consoleWS.onmessage = function(e) {
+                var d = document.createElement('div');
+                d.textContent = e.data;
+                log.appendChild(d);
+                while (log.childNodes.length > 500) log.removeChild(log.firstChild);
+                log.scrollTop = log.scrollHeight;
+            };
+            consoleWS.onclose = function() { st.textContent = '(deconnecte)'; };
+        }
+
         function showPage(name, btn) {
             document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
             document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
@@ -642,6 +676,8 @@ static const char INDEX_HTML[] = R"rawliteral(
             btn.classList.add('active');
             if (name === 'status') loadStatus();
             if (name === 'errors') loadErrors();
+            if (name === 'console') { connectConsole(); }
+            else if (consoleWS) { consoleWS.close(); consoleWS = null; }
         }
 
         function formatUptime(sec) {

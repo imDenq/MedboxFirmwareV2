@@ -532,8 +532,10 @@ void app_main(void)
     } else {
         ret = wifi_manager_start_ap(ap_uuid_suffix);
         if (ret == ESP_OK) {
-            char ap_ssid[32];
-            char ap_ip[16];
+            // Valeurs par defaut sures : les getters peuvent echouer juste apres
+            // le demarrage de l'AP (netif pas encore pret) -> pas de buffer non initialise.
+            char ap_ssid[33] = "Medbox";
+            char ap_ip[16] = "192.168.4.1";  // IP fixe du softAP ESP-IDF
             wifi_manager_get_ap_ssid(ap_ssid);
             wifi_manager_get_ap_ip(ap_ip);
             boot_ui_step_warn("WiFi indisponible - mode point d'acces");

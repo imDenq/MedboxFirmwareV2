@@ -86,35 +86,10 @@ void console_ws_start(void)
     xTaskCreate(console_sender_task, "console_ws", 4096, NULL, 3, NULL);
 }
 
-// --- Handlers HTTP ---
-
-// Page /console : terminal minimal qui se connecte en ws:// et affiche les logs.
-static esp_err_t console_page_handler(httpd_req_t *req)
-{
-    static const char PAGE[] =
-        "<!DOCTYPE html><html><head><meta charset=utf-8>"
-        "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        "<title>Console Medbox</title><style>"
-        "body{margin:0;background:#0b0f14;color:#c8d6e5;font:12px/1.5 monospace}"
-        "#bar{position:sticky;top:0;background:#111827;padding:6px 10px;color:#9ca3af}"
-        "#log{padding:8px 10px;white-space:pre-wrap;word-break:break-word}"
-        "</style></head><body>"
-        "<div id=bar>Console Medbox &mdash; <span id=st>connexion...</span></div>"
-        "<div id=log></div><script>"
-        "var l=document.getElementById('log'),s=document.getElementById('st');"
-        "function a(t){var d=document.createElement('div');d.textContent=t;l.appendChild(d);"
-        "while(l.childNodes.length>500)l.removeChild(l.firstChild);"
-        "window.scrollTo(0,document.body.scrollHeight);}"
-        "function c(){var w=new WebSocket('ws://'+location.host+'/ws/console');"
-        "w.onopen=function(){s.textContent='connecte';};"
-        "w.onmessage=function(e){a(e.data);};"
-        "w.onclose=function(){s.textContent='deconnecte, reconnexion...';setTimeout(c,2000);};}"
-        "c();</script></body></html>";
-    httpd_resp_set_type(req, "text/html");
-    return httpd_resp_send(req, PAGE, HTTPD_RESP_USE_STRLEN);
-}
+// --- Handler HTTP ---
 
 // Endpoint WebSocket : la connexion est juste enregistree, l'entrant est ignore.
+// La page qui l'affiche est l'onglet "Console" du dashboard (web_pages.c).
 static esp_err_t console_ws_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
@@ -140,16 +115,6 @@ static esp_err_t console_ws_handler(httpd_req_t *req)
 esp_err_t console_ws_register(httpd_handle_t server)
 {
     s_server = server;
-
-    httpd_uri_t page = {
-        .uri = "/console",
-        .method = HTTP_GET,
-        .handler = console_page_handler,
-    };
-    esp_err_t ret = httpd_register_uri_handler(server, &page);
-    if (ret != ESP_OK) {
-        return ret;
-    }
 
     httpd_uri_t ws = {
         .uri = "/ws/console",
