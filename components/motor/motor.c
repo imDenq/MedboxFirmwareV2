@@ -59,14 +59,15 @@ static void buzzer_off(void)
 }
 
 // Signal court : bip grave puis bip aigu.
+// NB : piezo PASSIF -> quasi inaudible sous ~1.5 kHz, le plus fort vers ~2-2.7 kHz.
 static void buzzer_double_beep(void)
 {
-    buzzer_tone(600);  // grave
-    vTaskDelay(pdMS_TO_TICKS(120));
+    buzzer_tone(1500);  // "grave" (deja dans la plage audible du piezo)
+    vTaskDelay(pdMS_TO_TICKS(150));
     buzzer_off();
-    vTaskDelay(pdMS_TO_TICKS(50));
-    buzzer_tone(2000);  // aigu
-    vTaskDelay(pdMS_TO_TICKS(120));
+    vTaskDelay(pdMS_TO_TICKS(60));
+    buzzer_tone(2700);  // "aigu" (proche resonance -> fort)
+    vTaskDelay(pdMS_TO_TICKS(150));
     buzzer_off();
 }
 
@@ -123,6 +124,9 @@ void motor_init(void)
     };
     ledc_channel_config(&chan);
 
+    // Bip de confirmation au boot (permet de valider le buzzer sans lancer un test)
+    buzzer_double_beep();
+
     ESP_LOGI(TAG, "Moteur initialise (desactive), microstepping 1/16");
 }
 
@@ -133,8 +137,8 @@ static void advance_one_slot(void)
     gpio_set_level(MOT_ENABLED, MOT_ENABLE_LEVEL);
     esp_rom_delay_us(500);  // laisser le driver s'activer
 
-    // Chirp court (feedback sonore)
-    buzzer_tone(1500);
+    // Chirp court (feedback sonore) — 2700 Hz proche resonance du piezo
+    buzzer_tone(2700);
     vTaskDelay(pdMS_TO_TICKS(40));
     buzzer_off();
 
