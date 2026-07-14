@@ -13,6 +13,7 @@
 #include "error_manager.h"
 #include "sdkconfig.h"
 #include <string.h>
+#include <time.h>
 
 static const char *TAG = "web_api";
 
@@ -48,6 +49,20 @@ static esp_err_t api_status_handler(httpd_req_t *req)
     // Memoire libre
     cJSON_AddNumberToObject(root, "free_heap", esp_get_free_heap_size());
     cJSON_AddNumberToObject(root, "min_free_heap", esp_get_minimum_free_heap_size());
+
+    // Heure systeme (reglee via la commande MQTT sync_time)
+    time_t now_ts = time(NULL);
+    cJSON *time_obj = cJSON_CreateObject();
+    bool time_synced = now_ts > 1600000000;  // > sept 2020 => horloge reglee
+    cJSON_AddBoolToObject(time_obj, "synced", time_synced);
+    if (time_synced) {
+        struct tm ti;
+        gmtime_r(&now_ts, &ti);
+        char timebuf[24];
+        strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S", &ti);
+        cJSON_AddStringToObject(time_obj, "utc", timebuf);
+    }
+    cJSON_AddItemToObject(root, "time", time_obj);
 
     // Etat WiFi STA
     cJSON *wifi_sta = cJSON_CreateObject();

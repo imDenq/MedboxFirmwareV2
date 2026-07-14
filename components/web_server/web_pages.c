@@ -534,6 +534,7 @@ static const char INDEX_HTML[] = R"rawliteral(
                 <div class="card-body">
                     <div class="row"><span class="label">Firmware</span><span class="value" id="firmware">---</span></div>
                     <div class="row"><span class="label">Uptime</span><span class="value" id="uptime">---</span></div>
+                    <div class="row"><span class="label">Heure</span><span class="value" id="time">---</span></div>
                     <div class="row"><span class="label">Memoire libre</span><span class="value" id="heap">---</span></div>
                 </div>
             </div>
@@ -717,6 +718,7 @@ static const char INDEX_HTML[] = R"rawliteral(
                     document.getElementById('header-uuid').textContent = d.uuid || '---';
                     document.getElementById('firmware').textContent = 'v' + d.firmware_version;
                     document.getElementById('uptime').textContent = formatUptime(d.uptime_sec);
+                    document.getElementById('time').textContent = (d.time && d.time.synced) ? d.time.utc + ' UTC' : 'non synchronisee';
                     document.getElementById('heap').textContent = Math.round(d.free_heap / 1024) + ' KB';
                     document.getElementById('footer-info').textContent = 'Medbox Firmware v' + d.firmware_version + ' / ESP-IDF ' + (d.idf_version || '---');
 

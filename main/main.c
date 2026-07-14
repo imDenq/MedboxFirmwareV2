@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <time.h>
+#include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -16,6 +18,7 @@
 #include "error_manager.h"
 #include "web_server.h"
 #include "boot_ui.h"
+#include "cJSON.h"
 
 static const char *TAG = "medbox_main";
 
@@ -197,6 +200,46 @@ void medbox_evt_dispense_confirmed(const char *dose_id)
     ESP_LOGI(TAG, "Event dispense_confirmed: %s", dose_id);
 }
 
+// Synchronise l'horloge systeme depuis une commande sync_time.
+// Payload : {"server_time": "2026-07-14T10:00:00.123456+00:00"} (UTC).
+static void handle_sync_time(const char *payload, size_t len)
+{
+    cJSON *root = cJSON_ParseWithLength(payload, len);
+    if (root == NULL) {
+        ESP_LOGW(TAG, "sync_time: JSON invalide");
+        return;
+    }
+
+    const cJSON *st = cJSON_GetObjectItemCaseSensitive(root, "server_time");
+    if (cJSON_IsString(st) && st->valuestring != NULL) {
+        int y, mo, d, h, mi, s;
+        if (sscanf(st->valuestring, "%d-%d-%dT%d:%d:%d", &y, &mo, &d, &h, &mi, &s) == 6) {
+            struct tm tm_utc = {0};
+            tm_utc.tm_year = y - 1900;
+            tm_utc.tm_mon = mo - 1;
+            tm_utc.tm_mday = d;
+            tm_utc.tm_hour = h;
+            tm_utc.tm_min = mi;
+            tm_utc.tm_sec = s;
+            tm_utc.tm_isdst = 0;
+            time_t t = mktime(&tm_utc);  // TZ=UTC0 -> interprete en UTC
+            if (t > 0) {
+                struct timeval tv = {.tv_sec = t, .tv_usec = 0};
+                settimeofday(&tv, NULL);
+                ESP_LOGI(TAG, "Horloge synchronisee (UTC): %s", st->valuestring);
+            } else {
+                ESP_LOGW(TAG, "sync_time: mktime a echoue");
+            }
+        } else {
+            ESP_LOGW(TAG, "sync_time: format de date invalide: %s", st->valuestring);
+        }
+    } else {
+        ESP_LOGW(TAG, "sync_time: champ server_time manquant");
+    }
+
+    cJSON_Delete(root);
+}
+
 // Traite une commande reçue
 static void process_command(const char *topic, const char *payload, size_t len)
 {
@@ -226,6 +269,11 @@ static void process_command(const char *topic, const char *payload, size_t len)
         // Reset de la roue de médicaments
         ESP_LOGI(TAG, "Commande WHEEL_RESET reçue");
         // TODO: Implémenter le reset de la roue
+
+    } else if (strcmp(cmd_type, "sync_time") == 0) {
+        // Synchronisation de l'horloge (heure serveur)
+        ESP_LOGI(TAG, "Commande SYNC_TIME reçue");
+        handle_sync_time(payload, len);
 
     } else {
         ESP_LOGW(TAG, "Commande inconnue: %s", cmd_type);
@@ -386,6 +434,10 @@ void app_main(void)
     // Boot "pro" : on coupe les logs (INFO/WARN) pour un affichage propre,
     // ils reprennent a la fin (les logs runtime MQTT/etc. sont conserves).
     esp_log_level_set("*", ESP_LOG_ERROR);
+
+    // Horloge systeme en UTC (reglee ensuite via la commande MQTT sync_time)
+    setenv("TZ", "UTC0", 1);
+    tzset();
 
     boot_ui_banner(FIRMWARE_VERSION, esp_get_idf_version());
     boot_ui_section("Initialisation");
