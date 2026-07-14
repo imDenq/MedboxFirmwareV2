@@ -641,7 +641,7 @@ static const char INDEX_HTML[] = R"rawliteral(
                     </div>
                     <div class="card-title">Console live <span id="console-status" style="font-weight:400;color:#8a94a6;font-size:12px;margin-left:6px;">(deconnecte)</span></div>
                 </div>
-                <div id="console-log" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.5;background:#0b0f14;color:#c8d6e5;padding:12px 14px;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word;"></div>
+                <div id="console-log" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.5;background:#0b0f14;color:#c8d6e5;padding:12px 14px;height:70vh;overflow-y:scroll;white-space:pre-wrap;word-break:break-word;"></div>
             </div>
         </div>
     </div>
