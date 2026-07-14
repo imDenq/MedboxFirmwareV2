@@ -58,6 +58,18 @@ static void buzzer_off(void)
     ledc_update_duty(BUZ_MODE, BUZ_CHANNEL);
 }
 
+// Signal court : bip grave puis bip aigu.
+static void buzzer_double_beep(void)
+{
+    buzzer_tone(600);  // grave
+    vTaskDelay(pdMS_TO_TICKS(120));
+    buzzer_off();
+    vTaskDelay(pdMS_TO_TICKS(50));
+    buzzer_tone(2000);  // aigu
+    vTaskDelay(pdMS_TO_TICKS(120));
+    buzzer_off();
+}
+
 // Delai du pas i sur `total` : profil triangulaire (lent -> rapide -> lent).
 static int ramp_delay(int i, int total)
 {
@@ -149,6 +161,9 @@ static void motor_test_task(void *arg)
 {
     int count = (int)(intptr_t)arg;
     ESP_LOGI(TAG, "Test distribution demarre : %d avances d'une case", count);
+
+    // Signal de demarrage : bip grave + bip aigu
+    buzzer_double_beep();
 
     for (int i = 0; i < count; i++) {
         gpio_set_level(LED_MEDIC, 1);
