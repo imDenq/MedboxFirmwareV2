@@ -1,11 +1,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_wifi.h"
 #include "sdkconfig.h"
 
 #include "secure_storage.h"
@@ -13,6 +15,7 @@
 #include "mqtt_client_medbox.h"
 #include "error_manager.h"
 #include "web_server.h"
+#include "boot_ui.h"
 
 static const char *TAG = "medbox_main";
 
@@ -122,15 +125,42 @@ static void send_telemetry(void)
 {
     if (!mqtt_client_medbox_is_connected()) return;
 
+    // MAC de l'interface WiFi station
+    uint8_t mac[6] = {0};
+    esp_wifi_get_mac(WIFI_IF_STA, mac);
+    char mac_str[18];
+    snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    // Adresse IP courante
+    char ip_str[16] = "0.0.0.0";
+    wifi_manager_get_ip(ip_str);
+
+    // Force du signal (RSSI)
+    int rssi = 0;
+    wifi_ap_record_t ap_info;
+    if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+        rssi = ap_info.rssi;
+    }
+
+    // Uptime en secondes
+    uint32_t uptime_s = xTaskGetTickCount() * portTICK_PERIOD_MS / 1000;
+
     // TODO: Récupérer la vraie date via SNTP
-    char telemetry_json[256];
+    char telemetry_json[384];
     snprintf(telemetry_json, sizeof(telemetry_json),
              "{"
              "\"firmware_version\":\"%s\","
+             "\"mac\":\"%s\","
+             "\"ip\":\"%s\","
+             "\"rssi\":%d,"
+             "\"uptime_s\":%lu,"
+             "\"battery_level\":%d,"
              "\"last_sync\":\"2026-04-03T08:00:00Z\","
              "\"current_date\":\"2026-04-03T20:55:00Z\""
              "}",
-             FIRMWARE_VERSION);
+             FIRMWARE_VERSION, mac_str, ip_str, rssi,
+             (unsigned long)uptime_s, battery_level);
 
     int msg_id = mqtt_client_medbox_publish(topic_telemetry, telemetry_json,
                                              strlen(telemetry_json), 1, false);
@@ -353,53 +383,70 @@ static void provisioning_mode(void)
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "===========================================");
-    ESP_LOGI(TAG, "    Medbox Firmware v1.0.0");
-    ESP_LOGI(TAG, "    ESP-IDF: %s", esp_get_idf_version());
-    ESP_LOGI(TAG, "===========================================");
+    // Boot "pro" : on coupe les logs (INFO/WARN) pour un affichage propre,
+    // ils reprennent a la fin (les logs runtime MQTT/etc. sont conserves).
+    esp_log_level_set("*", ESP_LOG_ERROR);
 
-    // Initialiser le gestionnaire d'erreurs
+    boot_ui_banner(FIRMWARE_VERSION, esp_get_idf_version());
+    boot_ui_section("Initialisation");
+
+    // Gestionnaire d'erreurs
     error_manager_init();
+    boot_ui_step("Gestionnaire d'erreurs", true);
 
-    // Initialiser le stockage sécurisé
+    // Stockage securise (NVS chiffree)
     esp_err_t ret = secure_storage_init();
+    boot_ui_step("Stockage securise (NVS chiffree)", ret == ESP_OK);
     if (ret != ESP_OK) {
+        boot_ui_footer(false);
+        esp_log_level_set("*", ESP_LOG_INFO);
         medbox_log_error(MEDBOX_ERR_NVS_INIT_FAILED, TAG, esp_err_to_name(ret));
         return;
     }
 
 #ifdef CONFIG_MEDBOX_DEV_MODE
     strncpy(medbox_uuid, CONFIG_MEDBOX_DEV_UUID, sizeof(medbox_uuid) - 1);
-    ESP_LOGW(TAG, "=== Medbox %s ===", medbox_uuid);
+    boot_ui_step("Identite (mode developpement)", true);
 #else
     #ifdef CONFIG_MEDBOX_PROVISIONING_MODE
+    esp_log_level_set("*", ESP_LOG_INFO);
     provisioning_mode();
     return;
     #endif
 
-    // Vérifier si l'appareil est provisionné
+    // Verifier si l'appareil est provisionne
     if (!secure_storage_uuid_provisioned()) {
+        boot_ui_step("Identite provisionnee", false);
+        boot_ui_footer(false);
+        esp_log_level_set("*", ESP_LOG_INFO);
         medbox_log_error(MEDBOX_ERR_UUID_NOT_PROVISIONED, TAG, "Activez CONFIG_MEDBOX_PROVISIONING_MODE");
         return;
     }
 
-    // Récupérer l'UUID
+    // Recuperer l'UUID
     ret = secure_storage_get_medbox_uuid(medbox_uuid, sizeof(medbox_uuid));
+    boot_ui_step("Identite provisionnee", ret == ESP_OK);
     if (ret != ESP_OK) {
+        boot_ui_footer(false);
+        esp_log_level_set("*", ESP_LOG_INFO);
         medbox_log_error(MEDBOX_ERR_NVS_READ_FAILED, TAG, "UUID");
         return;
     }
-    ESP_LOGI(TAG, "UUID Medbox: %s", medbox_uuid);
 
     #if CONFIG_MEDBOX_MQTT_USE_TLS
-    // Vérifier si les certificats sont provisionnés
-    if (!secure_storage_certs_provisioned()) {
+    // Verifier si les certificats sont provisionnes
+    bool certs_ok = secure_storage_certs_provisioned();
+    boot_ui_step("Certificats TLS (NVS)", certs_ok);
+    if (!certs_ok) {
+        boot_ui_footer(false);
+        esp_log_level_set("*", ESP_LOG_INFO);
         medbox_log_error(MEDBOX_ERR_CERT_NOT_PROVISIONED, TAG, "Activez CONFIG_MEDBOX_PROVISIONING_MODE");
         return;
     }
-    ESP_LOGI(TAG, "Certificats TLS trouvés dans NVS");
     #endif
 #endif
+
+    boot_ui_info("Medbox", medbox_uuid);
 
     // Construire les topics basés sur l'UUID (selon protocole MQTT Medbox)
     // Format: medbox/box/{UUID}/evt/{event} et medbox/box/{UUID}/cmd/{command}
@@ -422,35 +469,28 @@ void app_main(void)
     snprintf(topic_telemetry, sizeof(topic_telemetry),
              "%s/%s/telemetry", CONFIG_MEDBOX_MQTT_TOPIC_BASE, medbox_uuid);
 
-    ESP_LOGI(TAG, "Topics MQTT configurés:");
-    ESP_LOGI(TAG, "  Events base:   %s", topic_base_evt);
-    ESP_LOGI(TAG, "  Commands sub:  %s", topic_cmd_subscribe);
-    ESP_LOGI(TAG, "  Telemetry:     %s", topic_telemetry);
-    ESP_LOGI(TAG, "  Heartbeat:     %s", topic_evt_heartbeat);
+    boot_ui_step("Topics MQTT", true);
 
-    // Créer la queue pour les messages MQTT
+    // File de messages MQTT
     mqtt_rx_queue = xQueueCreate(10, sizeof(mqtt_message_t));
+    boot_ui_step("File de messages", mqtt_rx_queue != NULL);
     if (mqtt_rx_queue == NULL) {
+        boot_ui_footer(false);
+        esp_log_level_set("*", ESP_LOG_INFO);
         medbox_log_error(MEDBOX_ERR_SYS_QUEUE_CREATE_FAILED, TAG, "mqtt_rx_queue");
         return;
     }
 
-    // Initialiser le WiFi Manager
+    // Pilote WiFi
     ret = wifi_manager_init();
+    boot_ui_step("Pilote WiFi", ret == ESP_OK);
     if (ret != ESP_OK) {
+        boot_ui_footer(false);
+        esp_log_level_set("*", ESP_LOG_INFO);
         medbox_log_error(MEDBOX_ERR_WIFI_INIT_FAILED, TAG, esp_err_to_name(ret));
         return;
     }
-
     wifi_manager_set_callback(on_wifi_state_change);
-
-    // Démarrer la connexion WiFi
-    ESP_LOGI(TAG, "Connexion au WiFi: %s", CONFIG_MEDBOX_WIFI_SSID);
-    ret = wifi_manager_connect(CONFIG_MEDBOX_WIFI_SSID, CONFIG_MEDBOX_WIFI_PASSWORD);
-    if (ret != ESP_OK) {
-        medbox_log_error(MEDBOX_ERR_WIFI_CONNECT_FAILED, TAG, esp_err_to_name(ret));
-        return;
-    }
 
     // Preparer le suffixe pour l'AP (4 derniers caracteres de l'UUID)
     size_t uuid_len = strlen(medbox_uuid);
@@ -460,53 +500,74 @@ void app_main(void)
         strncpy(ap_uuid_suffix, medbox_uuid, sizeof(ap_uuid_suffix) - 1);
     }
 
-    // Attendre la connexion WiFi initiale (timeout 30s)
-    // Si timeout, on continue quand même - le WiFi manager retente en arrière-plan
-    ret = wifi_manager_wait_connected(30000);
-    if (ret == ESP_OK) {
+    // Connexion reseau
+    boot_ui_section("Connexion reseau");
+    ret = wifi_manager_connect(CONFIG_MEDBOX_WIFI_SSID, CONFIG_MEDBOX_WIFI_PASSWORD);
+    if (ret != ESP_OK) {
+        boot_ui_step("Connexion WiFi", false);
+        boot_ui_footer(false);
+        esp_log_level_set("*", ESP_LOG_INFO);
+        medbox_log_error(MEDBOX_ERR_WIFI_CONNECT_FAILED, TAG, esp_err_to_name(ret));
+        return;
+    }
+
+    // Attente animee de la connexion (timeout 30s). Si echec, on bascule en
+    // point d'acces et on continue (le WiFi manager retente en arriere-plan).
+    char wifi_label[80];
+    snprintf(wifi_label, sizeof(wifi_label), "Connexion a %s", CONFIG_MEDBOX_WIFI_SSID);
+    boot_ui_spin_start(wifi_label);
+    int waited_ms = 0;
+    while (!wifi_manager_is_connected() && waited_ms < 30000) {
+        boot_ui_spin_tick();
+        vTaskDelay(pdMS_TO_TICKS(120));
+        waited_ms += 120;
+    }
+    bool wifi_connected = wifi_manager_is_connected();
+    boot_ui_spin_end(wifi_connected);
+
+    if (wifi_connected) {
         char ip_str[16];
         wifi_manager_get_ip(ip_str);
-        ESP_LOGI(TAG, "Connecte au WiFi! IP: %s", ip_str);
-        // AP non demarre car WiFi connecte
+        boot_ui_info("Adresse IP", ip_str);
     } else {
-        ESP_LOGW(TAG, "WiFi non connecte apres 30s - demarrage point d'acces");
-        // Demarrer le point d'acces car WiFi non connecte
         ret = wifi_manager_start_ap(ap_uuid_suffix);
         if (ret == ESP_OK) {
             char ap_ssid[32];
             char ap_ip[16];
             wifi_manager_get_ap_ssid(ap_ssid);
             wifi_manager_get_ap_ip(ap_ip);
-            ESP_LOGI(TAG, "Point d'acces demarre: %s (%s)", ap_ssid, ap_ip);
+            boot_ui_step_warn("WiFi indisponible - mode point d'acces");
+            boot_ui_info("Reseau", ap_ssid);
+            boot_ui_info("Adresse", ap_ip);
         } else {
-            ESP_LOGW(TAG, "Echec demarrage point d'acces");
+            boot_ui_step("Point d'acces", false);
         }
     }
 
-    // Demarrer le serveur web
+    // Services
+    boot_ui_section("Services");
     ret = web_server_start();
-    if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "Serveur web demarre sur port %d", WEB_SERVER_PORT);
-    } else {
-        ESP_LOGW(TAG, "Echec demarrage serveur web");
+    boot_ui_step("Serveur web (port 80)", ret == ESP_OK);
+
+    // Taches FreeRTOS
+    BaseType_t task_ret = xTaskCreate(mqtt_task, "mqtt_task", 8192, NULL, 5, NULL);
+    bool tasks_ok = (task_ret == pdPASS);
+    if (tasks_ok) {
+        task_ret = xTaskCreate(main_task, "main_task", 4096, NULL, 4, NULL);
+        tasks_ok = (task_ret == pdPASS);
     }
-
-    // Créer les tâches FreeRTOS
-    BaseType_t task_ret;
-
-    task_ret = xTaskCreate(mqtt_task, "mqtt_task", 8192, NULL, 5, NULL);
-    if (task_ret != pdPASS) {
-        medbox_log_error(MEDBOX_ERR_SYS_TASK_CREATE_FAILED, TAG, "mqtt_task");
+    boot_ui_step("Taches systeme", tasks_ok);
+    if (!tasks_ok) {
+        boot_ui_footer(false);
+        esp_log_level_set("*", ESP_LOG_INFO);
+        medbox_log_error(MEDBOX_ERR_SYS_TASK_CREATE_FAILED, TAG, "task");
         return;
     }
 
-    task_ret = xTaskCreate(main_task, "main_task", 4096, NULL, 4, NULL);
-    if (task_ret != pdPASS) {
-        medbox_log_error(MEDBOX_ERR_SYS_TASK_CREATE_FAILED, TAG, "main_task");
-        return;
-    }
+    boot_ui_footer(true);
 
-    ESP_LOGI(TAG, "Système démarré avec succès!");
+    // Reprendre les logs normaux (MQTT, runtime...)
+    esp_log_level_set("*", ESP_LOG_INFO);
 
-    // app_main peut retourner, les tâches continuent de tourner
+    // app_main peut retourner, les taches continuent de tourner
 }
