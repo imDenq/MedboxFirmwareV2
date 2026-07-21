@@ -643,8 +643,8 @@ static const char INDEX_HTML[] = R"rawliteral(
                     <div class="row"><span class="label">Valeur actuelle</span><span class="value" id="motor-current">---</span></div>
                     <div class="row"><span class="label">Valeur par defaut</span><span class="value" id="motor-default">---</span></div>
                     <div class="form-group" style="margin-top:16px;">
-                        <label class="form-label">Micropas par case</label>
-                        <input type="number" id="motor-steps" min="1" max="4000" step="1" placeholder="145">
+                        <label class="form-label">Micropas par case (decimales acceptees)</label>
+                        <input type="number" id="motor-steps" min="1" max="4000" step="0.01" placeholder="148.50">
                     </div>
                     <button class="btn btn-primary" id="motor-apply-btn" onclick="applyCalib()">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
@@ -654,6 +654,15 @@ static const char INDEX_HTML[] = R"rawliteral(
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
                         Enregistrer sans tester
                     </button>
+                    <button class="btn btn-ghost" style="margin-top:10px;" onclick="fullTurn()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10"/></svg>
+                        Tour complet (22 cases)
+                    </button>
+                    <p style="margin:12px 0 0;color:#8a94a6;font-size:12px;line-height:1.6;">
+                        Le tour complet est le test le plus precis : apres 22 cases la roue
+                        doit revenir exactement a son point de depart. Tout ecart visible
+                        correspond a l'erreur cumulee, a corriger en ajustant les decimales.
+                    </p>
                 </div>
             </div>
         </div>
@@ -847,17 +856,25 @@ static const char INDEX_HTML[] = R"rawliteral(
                 .catch(function(e) { showMsg('wifi-msg', 'Erreur', false); });
         }
 
+        function fullTurn() {
+            fetch('/api/motor/full-turn', {method: 'POST'})
+                .then(function(r) { return r.json(); })
+                .then(function(d) { showMsg('motor-msg', d.message, d.success); })
+                .catch(function(e) { showMsg('motor-msg', 'Erreur', false); });
+        }
+
         function loadMotor() {
             fetch('/api/motor')
                 .then(function(r) { return r.json(); })
                 .then(function(d) {
-                    document.getElementById('motor-current').textContent = d.steps_per_slot + ' micropas';
-                    document.getElementById('motor-default').textContent = d['default'] + ' micropas';
+                    document.getElementById('motor-current').textContent = d.steps_per_slot.toFixed(2) + ' micropas';
+                    document.getElementById('motor-default').textContent = d['default'].toFixed(2) + ' micropas';
                     var input = document.getElementById('motor-steps');
                     // Ne pas ecraser une saisie en cours de l'utilisateur.
-                    if (document.activeElement !== input) input.value = d.steps_per_slot;
+                    if (document.activeElement !== input) input.value = d.steps_per_slot.toFixed(2);
                     input.min = d.min;
                     input.max = d.max;
+                    if (d.step) input.step = d.step;
                 })
                 .catch(function(e) { showMsg('motor-msg', 'Impossible de lire la calibration', false); });
         }
@@ -865,7 +882,7 @@ static const char INDEX_HTML[] = R"rawliteral(
         // saveOnly = true -> enregistre sans faire tourner la roue.
         function applyCalib(saveOnly) {
             var input = document.getElementById('motor-steps');
-            var steps = parseInt(input.value, 10);
+            var steps = parseFloat(input.value);
             if (isNaN(steps)) {
                 showMsg('motor-msg', 'Saisissez un nombre de micropas', false);
                 return;

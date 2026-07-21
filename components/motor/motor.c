@@ -14,8 +14,10 @@
 static const char *TAG = "motor";
 
 // Namespace / cle NVS pour la calibration (partition "nvs" par defaut, chiffree).
+// Cle distincte de l'ancienne "steps_slot" (entiere) : la relire telle quelle
+// interpreterait 148 comme 1.48 micropas.
 #define MOTOR_NVS_NAMESPACE "motor_cfg"
-#define MOTOR_NVS_KEY_STEPS "steps_slot"
+#define MOTOR_NVS_KEY_STEPS_X100 "steps_x100"
 
 // --- Pinout (confirme schema U4 ESP32-DevKitC) ---
 #define MOT_DIR GPIO_NUM_32
@@ -32,9 +34,13 @@ static const char *TAG = "motor";
 #define MOT_DIR_DISPENSE 1   // sens de distribution (a caler si besoin)
 
 // --- Calibration mecanique ---
-// 3200 micropas/tour (moteur 200 pas * 1/16) / 22 cases ~= 145 micropas/case.
-// Valeur ajustable depuis l'interface web et persistee en NVS (cf. motor_set_steps_per_slot).
-static volatile int s_steps_per_slot = MOTOR_STEPS_PER_SLOT_DEFAULT;
+// 3200 micropas/tour (moteur 200 pas * 1/16) / 22 cases ~= 145.45 micropas/case.
+// Valeur ajustable depuis l'interface web et persistee en NVS, au centieme.
+static volatile int s_steps_per_slot_x100 = MOTOR_STEPS_PER_SLOT_DEFAULT_X100;
+
+// Reste de la division (en centiemes) reporte sur l'avance suivante : garantit
+// que la moyenne des pas envoyes converge vers la valeur calibree exacte.
+static int s_step_remainder_x100 = 0;
 
 #define DISTRIB_PER_DAY 3
 
@@ -80,37 +86,44 @@ static void buzzer_double_beep(void)
 
 // --- Calibration : persistance NVS ---
 
+// Formatage "148.50" pour les logs (pas de %f dans les logs ESP par defaut).
+#define STEPS_FMT "%d.%02d"
+#define STEPS_ARG(x100) ((x100) / MOTOR_STEPS_SCALE), ((x100) % MOTOR_STEPS_SCALE)
+
 // Recharge la valeur calibree depuis la NVS. Silencieux si absente (1er boot).
 static void calib_load(void)
 {
     nvs_handle_t h;
     if (nvs_open(MOTOR_NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) {
-        ESP_LOGI(TAG, "Pas de calibration en NVS, defaut %d micropas/case",
-                 MOTOR_STEPS_PER_SLOT_DEFAULT);
+        ESP_LOGI(TAG, "Pas de calibration en NVS, defaut " STEPS_FMT " micropas/case",
+                 STEPS_ARG(MOTOR_STEPS_PER_SLOT_DEFAULT_X100));
         return;
     }
     int32_t stored = 0;
-    if (nvs_get_i32(h, MOTOR_NVS_KEY_STEPS, &stored) == ESP_OK && stored >= MOTOR_STEPS_PER_SLOT_MIN
-        && stored <= MOTOR_STEPS_PER_SLOT_MAX) {
-        s_steps_per_slot = (int)stored;
-        ESP_LOGI(TAG, "Calibration rechargee : %d micropas/case", s_steps_per_slot);
+    if (nvs_get_i32(h, MOTOR_NVS_KEY_STEPS_X100, &stored) == ESP_OK
+        && stored >= MOTOR_STEPS_PER_SLOT_MIN_X100 && stored <= MOTOR_STEPS_PER_SLOT_MAX_X100) {
+        s_steps_per_slot_x100 = (int)stored;
+        ESP_LOGI(TAG, "Calibration rechargee : " STEPS_FMT " micropas/case",
+                 STEPS_ARG(s_steps_per_slot_x100));
     }
     nvs_close(h);
 }
 
-int motor_get_steps_per_slot(void)
+int motor_get_steps_per_slot_x100(void)
 {
-    return s_steps_per_slot;
+    return s_steps_per_slot_x100;
 }
 
-bool motor_set_steps_per_slot(int steps)
+bool motor_set_steps_per_slot_x100(int steps_x100)
 {
-    if (steps < MOTOR_STEPS_PER_SLOT_MIN || steps > MOTOR_STEPS_PER_SLOT_MAX) {
-        ESP_LOGW(TAG, "Calibration refusee : %d hors bornes [%d..%d]", steps,
-                 MOTOR_STEPS_PER_SLOT_MIN, MOTOR_STEPS_PER_SLOT_MAX);
+    if (steps_x100 < MOTOR_STEPS_PER_SLOT_MIN_X100
+        || steps_x100 > MOTOR_STEPS_PER_SLOT_MAX_X100) {
+        ESP_LOGW(TAG, "Calibration refusee : " STEPS_FMT " hors bornes", STEPS_ARG(steps_x100));
         return false;
     }
-    s_steps_per_slot = steps;
+    s_steps_per_slot_x100 = steps_x100;
+    // Nouvelle calibration : on repart d'une fraction nulle.
+    s_step_remainder_x100 = 0;
 
     nvs_handle_t h;
     esp_err_t err = nvs_open(MOTOR_NVS_NAMESPACE, NVS_READWRITE, &h);
@@ -119,7 +132,7 @@ bool motor_set_steps_per_slot(int steps)
                  esp_err_to_name(err));
         return false;
     }
-    err = nvs_set_i32(h, MOTOR_NVS_KEY_STEPS, (int32_t)steps);
+    err = nvs_set_i32(h, MOTOR_NVS_KEY_STEPS_X100, (int32_t)steps_x100);
     if (err == ESP_OK) {
         err = nvs_commit(h);
     }
@@ -129,7 +142,8 @@ bool motor_set_steps_per_slot(int steps)
         ESP_LOGE(TAG, "NVS write echoue (%s)", esp_err_to_name(err));
         return false;
     }
-    ESP_LOGI(TAG, "Calibration enregistree : %d micropas/case (persistante au reboot)", steps);
+    ESP_LOGI(TAG, "Calibration enregistree : " STEPS_FMT " micropas/case (persistante)",
+             STEPS_ARG(steps_x100));
     return true;
 }
 
@@ -192,8 +206,9 @@ void motor_init(void)
     // Calibration persistee (si l'utilisateur en a defini une via l'interface web)
     calib_load();
 
-    ESP_LOGI(TAG, "Moteur initialise (desactive), microstepping 1/16, %d micropas/case",
-             s_steps_per_slot);
+    ESP_LOGI(TAG, "Moteur initialise (desactive), microstepping 1/16, " STEPS_FMT
+                  " micropas/case",
+             STEPS_ARG(s_steps_per_slot_x100));
 }
 
 // Avance d'une case : active le moteur, chirp, rampe de pas, puis DESACTIVE.
@@ -208,9 +223,13 @@ static void advance_one_slot(void)
     vTaskDelay(pdMS_TO_TICKS(40));
     buzzer_off();
 
-    // Lecture unique : la valeur peut etre changee a chaud depuis l'interface web,
-    // on fige celle du mouvement en cours pour garder une rampe coherente.
-    const int steps = s_steps_per_slot;
+    // Nombre entier de pas pour cette case : valeur calibree + fraction reportee
+    // de la case precedente. Le nouveau reste est conserve pour la suivante, ce
+    // qui annule la derive sur un tour complet (ex: 148.50 -> 148, 149, 148, ...).
+    const int budget_x100 = s_steps_per_slot_x100 + s_step_remainder_x100;
+    const int steps = budget_x100 / MOTOR_STEPS_SCALE;
+    s_step_remainder_x100 = budget_x100 % MOTOR_STEPS_SCALE;
+
     for (int i = 0; i < steps; i++) {
         int d = ramp_delay(i, steps);
         gpio_set_level(MOT_STEP, 1);
@@ -230,10 +249,12 @@ void motor_advance_slots(int slots)
     }
 }
 
+// Sequence de `count` avances d'une case, avec pause entre chaque.
 static void motor_test_task(void *arg)
 {
     int count = (int)(intptr_t)arg;
-    ESP_LOGI(TAG, "Test distribution demarre : %d avances d'une case", count);
+    ESP_LOGI(TAG, "Sequence demarree : %d avances d'une case (" STEPS_FMT " micropas/case)", count,
+             STEPS_ARG(s_steps_per_slot_x100));
 
     // Signal de demarrage : bip grave + bip aigu
     buzzer_double_beep();
@@ -246,34 +267,49 @@ static void motor_test_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(PAUSE_BETWEEN_MS));
     }
 
-    ESP_LOGI(TAG, "Test distribution termine");
+    ESP_LOGI(TAG, "Sequence terminee");
     s_test_running = false;
     vTaskDelete(NULL);
 }
 
-void motor_start_test(int days)
+// Lance la sequence de `count` avances. Retourne false si un mouvement tourne deja.
+static bool start_sequence(int count, const char *what)
 {
     if (s_test_running) {
-        ESP_LOGW(TAG, "Test de distribution deja en cours");
-        return;
+        ESP_LOGW(TAG, "Mouvement deja en cours, %s ignore", what);
+        return false;
     }
+    s_test_running = true;
+    if (xTaskCreate(motor_test_task, "motor_seq", 4096, (void *)(intptr_t)count, 4, NULL) !=
+        pdPASS) {
+        s_test_running = false;
+        ESP_LOGE(TAG, "Impossible de lancer la tache (%s)", what);
+        return false;
+    }
+    return true;
+}
+
+void motor_start_test(int days)
+{
     if (days <= 0) {
         days = 7;
     }
-    int count = days * DISTRIB_PER_DAY;
-    s_test_running = true;
-    if (xTaskCreate(motor_test_task, "motor_test", 4096, (void *)(intptr_t)count, 4, NULL) !=
-        pdPASS) {
-        s_test_running = false;
-        ESP_LOGE(TAG, "Impossible de lancer la tache de test");
-    }
+    start_sequence(days * DISTRIB_PER_DAY, "test distribution");
+}
+
+void motor_start_full_turn(void)
+{
+    // Un tour complet remet la roue a son point de depart : l'ecart visible en
+    // fin de tour est l'erreur de calibration cumulee sur 22 cases.
+    start_sequence(MOTOR_SLOTS_PER_TURN, "tour complet");
 }
 
 // Une seule avance d'une case (une "prise"), en tache de fond.
 static void motor_single_task(void *arg)
 {
     (void)arg;
-    ESP_LOGI(TAG, "Distribution d'une prise (%d micropas)", s_steps_per_slot);
+    ESP_LOGI(TAG, "Distribution d'une prise (" STEPS_FMT " micropas/case)",
+             STEPS_ARG(s_steps_per_slot_x100));
 
     buzzer_double_beep();
 

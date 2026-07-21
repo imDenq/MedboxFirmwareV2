@@ -19,6 +19,10 @@ static wifi_state_t s_wifi_state = WIFI_STATE_DISCONNECTED;
 static wifi_event_callback_t s_user_callback = NULL;
 static bool s_initialized = false;
 static bool s_ap_active = false;
+// esp_wifi_start() ne doit etre appele qu'une fois : la connexion STA comme le
+// demarrage de l'AP peuvent en avoir besoin en premier (ex: aucun reseau
+// enregistre -> on demarre directement en point d'acces sans passer par connect).
+static bool s_wifi_started = false;
 static char s_ap_ssid[32] = {0};
 
 static void notify_state_change(wifi_state_t new_state)
@@ -151,7 +155,13 @@ esp_err_t wifi_manager_connect(const char *ssid, const char *password)
     ESP_LOGI(TAG, "WiFi config - SSID: %s, Password length: %d", ssid, password ? strlen(password) : 0);
 
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
+    if (!s_wifi_started) {
+        ESP_ERROR_CHECK(esp_wifi_start());
+        s_wifi_started = true;
+    } else {
+        // Driver deja demarre (ex: AP lance avant) -> il suffit de (re)connecter.
+        esp_wifi_connect();
+    }
 
     ESP_LOGI(TAG, "Connexion au WiFi SSID: %s", ssid);
     return ESP_OK;
@@ -297,6 +307,18 @@ esp_err_t wifi_manager_start_ap(const char *uuid_suffix)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Erreur config AP: %s", esp_err_to_name(ret));
         return ret;
+    }
+
+    // Sans esp_wifi_start(), l'AP est configure mais n'emet aucune balise : le
+    // SSID reste invisible. Cas atteint quand aucun reseau n'est enregistre et
+    // qu'on n'est donc jamais passe par wifi_manager_connect().
+    if (!s_wifi_started) {
+        ret = esp_wifi_start();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Erreur demarrage WiFi: %s", esp_err_to_name(ret));
+            return ret;
+        }
+        s_wifi_started = true;
     }
 
     ESP_LOGI(TAG, "AP configure: SSID=%s, Password=%s", s_ap_ssid, WIFI_AP_PASSWORD);

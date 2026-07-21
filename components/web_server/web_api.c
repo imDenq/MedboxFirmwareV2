@@ -349,10 +349,15 @@ static esp_err_t api_wifi_forget_handler(httpd_req_t *req)
 static esp_err_t api_motor_get_handler(httpd_req_t *req)
 {
     cJSON *root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "steps_per_slot", motor_get_steps_per_slot());
-    cJSON_AddNumberToObject(root, "default", MOTOR_STEPS_PER_SLOT_DEFAULT);
-    cJSON_AddNumberToObject(root, "min", MOTOR_STEPS_PER_SLOT_MIN);
-    cJSON_AddNumberToObject(root, "max", MOTOR_STEPS_PER_SLOT_MAX);
+    cJSON_AddNumberToObject(root, "steps_per_slot",
+                            motor_get_steps_per_slot_x100() / (double)MOTOR_STEPS_SCALE);
+    cJSON_AddNumberToObject(root, "default",
+                            MOTOR_STEPS_PER_SLOT_DEFAULT_X100 / (double)MOTOR_STEPS_SCALE);
+    cJSON_AddNumberToObject(root, "min",
+                            MOTOR_STEPS_PER_SLOT_MIN_X100 / (double)MOTOR_STEPS_SCALE);
+    cJSON_AddNumberToObject(root, "max",
+                            MOTOR_STEPS_PER_SLOT_MAX_X100 / (double)MOTOR_STEPS_SCALE);
+    cJSON_AddNumberToObject(root, "step", 1.0 / MOTOR_STEPS_SCALE);
     cJSON_AddBoolToObject(root, "busy", motor_test_running());
 
     char *json_str = cJSON_PrintUnformatted(root);
@@ -393,7 +398,10 @@ static esp_err_t api_motor_calibrate_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "steps_per_slot required");
         return ESP_FAIL;
     }
-    int steps = steps_json->valueint;
+    // valuedouble pour accepter les decimales (148.5). Arrondi au centieme :
+    // la fraction est ensuite reportee d'une case a l'autre par le moteur.
+    double steps_f = steps_json->valuedouble;
+    int steps_x100 = (int)(steps_f * MOTOR_STEPS_SCALE + (steps_f >= 0 ? 0.5 : -0.5));
 
     // "test": false permet d'enregistrer sans faire tourner la roue.
     cJSON *test_json = cJSON_GetObjectItem(root, "test");
@@ -410,24 +418,61 @@ static esp_err_t api_motor_calibrate_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    bool saved = motor_set_steps_per_slot(steps);
+    bool saved = motor_set_steps_per_slot_x100(steps_x100);
     if (!saved) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Value out of range or NVS write failed");
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "Calibration appliquee : %d micropas/case (essai=%d)", steps, do_test);
+    ESP_LOGI(TAG, "Calibration appliquee : %d.%02d micropas/case (essai=%d)",
+             steps_x100 / MOTOR_STEPS_SCALE, steps_x100 % MOTOR_STEPS_SCALE, do_test);
     if (do_test) {
         motor_dispense_once();
     }
 
     cJSON *response = cJSON_CreateObject();
     cJSON_AddBoolToObject(response, "success", true);
-    cJSON_AddNumberToObject(response, "steps_per_slot", motor_get_steps_per_slot());
+    cJSON_AddNumberToObject(response, "steps_per_slot",
+                            motor_get_steps_per_slot_x100() / (double)MOTOR_STEPS_SCALE);
     cJSON_AddBoolToObject(response, "tested", do_test);
     cJSON_AddStringToObject(response, "message",
                             do_test ? "Valeur enregistree, essai d'une case en cours"
                                     : "Valeur enregistree");
+
+    char *json_str = cJSON_PrintUnformatted(response);
+    cJSON_Delete(response);
+    if (json_str == NULL) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json_str, strlen(json_str));
+    free(json_str);
+    return ESP_OK;
+}
+
+// ============================================
+// POST /api/motor/full-turn - Tour complet (22 cases) pour valider la calibration
+// ============================================
+static esp_err_t api_motor_full_turn_handler(httpd_req_t *req)
+{
+    if (motor_test_running()) {
+        const char *busy = "{\"success\":false,\"message\":\"Moteur deja en mouvement\"}";
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, busy, strlen(busy));
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "Tour complet demande depuis l'interface web");
+    motor_start_full_turn();
+
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(response, "success", true);
+    cJSON_AddNumberToObject(response, "slots", MOTOR_SLOTS_PER_TURN);
+    cJSON_AddStringToObject(response, "message",
+                            "Tour complet en cours (22 cases) - la roue doit revenir "
+                            "a son point de depart");
 
     char *json_str = cJSON_PrintUnformatted(response);
     cJSON_Delete(response);
@@ -500,8 +545,15 @@ esp_err_t web_api_register_handlers(httpd_handle_t server)
     httpd_register_uri_handler(server, &uri_wifi_config_post);
     httpd_register_uri_handler(server, &uri_errors);
     httpd_register_uri_handler(server, &uri_wifi_forget);
+    httpd_uri_t uri_motor_full_turn = {
+        .uri = "/api/motor/full-turn",
+        .method = HTTP_POST,
+        .handler = api_motor_full_turn_handler,
+    };
+
     httpd_register_uri_handler(server, &uri_motor_get);
     httpd_register_uri_handler(server, &uri_motor_calibrate);
+    httpd_register_uri_handler(server, &uri_motor_full_turn);
 
     ESP_LOGI(TAG, "API endpoints enregistres");
     return ESP_OK;
