@@ -286,18 +286,10 @@ static void process_command(const char *topic, const char *payload, size_t len)
         handle_sync_time(payload, len);
 
     } else if (strcmp(cmd_type, "test_distribution") == 0) {
-        // Test de distribution : fait tourner la roue sur N jours (defaut 7)
-        ESP_LOGI(TAG, "Commande TEST_DISTRIBUTION reçue");
-        int days = 7;
-        cJSON *root = cJSON_ParseWithLength(payload, len);
-        if (root != NULL) {
-            const cJSON *d = cJSON_GetObjectItemCaseSensitive(root, "days");
-            if (cJSON_IsNumber(d) && d->valueint > 0) {
-                days = d->valueint;
-            }
-            cJSON_Delete(root);
-        }
-        motor_start_test(days);
+        // Test de distribution : une seule prise (une case), comme pour la calibration.
+        // Le champ "days" du backend est ignore : on ne veut plus derouler 21 cases.
+        ESP_LOGI(TAG, "Commande TEST_DISTRIBUTION reçue - distribution d'une prise");
+        motor_dispense_once();
 
     } else {
         ESP_LOGW(TAG, "Commande inconnue: %s", cmd_type);
@@ -578,28 +570,50 @@ void app_main(void)
 
     // Connexion reseau
     boot_ui_section("Connexion reseau");
-    ret = wifi_manager_connect(CONFIG_MEDBOX_WIFI_SSID, CONFIG_MEDBOX_WIFI_PASSWORD);
-    if (ret != ESP_OK) {
-        boot_ui_step("Connexion WiFi", false);
-        boot_ui_footer(false);
-        esp_log_level_set("*", ESP_LOG_INFO);
-        medbox_log_error(MEDBOX_ERR_WIFI_CONNECT_FAILED, TAG, esp_err_to_name(ret));
-        return;
+
+    // Identifiants : priorite au reseau enregistre depuis l'interface web (NVS,
+    // gere par esp_wifi), sinon repli sur le SSID de secours du menuconfig.
+    // Si aucun des deux n'est defini, on demarre directement en point d'acces :
+    // l'utilisateur configure alors son reseau (ex: partage de connexion) depuis
+    // un telephone, sans qu'un SSID code en dur ne prenne la main.
+    char sta_ssid[33] = {0};
+    char sta_pass[65] = {0};
+    wifi_config_t stored_cfg = {0};
+    if (esp_wifi_get_config(WIFI_IF_STA, &stored_cfg) == ESP_OK
+        && stored_cfg.sta.ssid[0] != '\0') {
+        strncpy(sta_ssid, (const char *)stored_cfg.sta.ssid, sizeof(sta_ssid) - 1);
+        strncpy(sta_pass, (const char *)stored_cfg.sta.password, sizeof(sta_pass) - 1);
+        ESP_LOGI(TAG, "Reseau enregistre trouve : %s", sta_ssid);
+    } else {
+        strncpy(sta_ssid, CONFIG_MEDBOX_WIFI_SSID, sizeof(sta_ssid) - 1);
+        strncpy(sta_pass, CONFIG_MEDBOX_WIFI_PASSWORD, sizeof(sta_pass) - 1);
     }
 
-    // Attente animee de la connexion (timeout 30s). Si echec, on bascule en
-    // point d'acces et on continue (le WiFi manager retente en arriere-plan).
-    char wifi_label[80];
-    snprintf(wifi_label, sizeof(wifi_label), "Connexion a %s", CONFIG_MEDBOX_WIFI_SSID);
-    boot_ui_spin_start(wifi_label);
-    int waited_ms = 0;
-    while (!wifi_manager_is_connected() && waited_ms < 30000) {
-        boot_ui_spin_tick();
-        vTaskDelay(pdMS_TO_TICKS(120));
-        waited_ms += 120;
+    bool wifi_connected = false;
+    if (sta_ssid[0] == '\0') {
+        boot_ui_step_warn("Aucun reseau enregistre - mode configuration");
+    } else {
+        ret = wifi_manager_connect(sta_ssid, sta_pass);
+        if (ret != ESP_OK) {
+            // Non fatal : on bascule en point d'acces pour permettre la config.
+            boot_ui_step("Connexion WiFi", false);
+            medbox_log_error(MEDBOX_ERR_WIFI_CONNECT_FAILED, TAG, esp_err_to_name(ret));
+        } else {
+            // Attente animee de la connexion (timeout 30s). Si echec, on bascule en
+            // point d'acces et on continue (le WiFi manager retente en arriere-plan).
+            char wifi_label[80];
+            snprintf(wifi_label, sizeof(wifi_label), "Connexion a %s", sta_ssid);
+            boot_ui_spin_start(wifi_label);
+            int waited_ms = 0;
+            while (!wifi_manager_is_connected() && waited_ms < 30000) {
+                boot_ui_spin_tick();
+                vTaskDelay(pdMS_TO_TICKS(120));
+                waited_ms += 120;
+            }
+            wifi_connected = wifi_manager_is_connected();
+            boot_ui_spin_end(wifi_connected);
+        }
     }
-    bool wifi_connected = wifi_manager_is_connected();
-    boot_ui_spin_end(wifi_connected);
 
     if (wifi_connected) {
         char ip_str[16];

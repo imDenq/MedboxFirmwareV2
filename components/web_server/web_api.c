@@ -11,6 +11,7 @@
 #include "cJSON.h"
 #include "wifi_manager.h"
 #include "error_manager.h"
+#include "motor.h"
 #include "sdkconfig.h"
 #include <string.h>
 #include <time.h>
@@ -309,6 +310,138 @@ static esp_err_t api_errors_handler(httpd_req_t *req)
 }
 
 // ============================================
+// POST /api/wifi/forget - Efface le reseau enregistre et repasse en point d'acces
+// ============================================
+static esp_err_t api_wifi_forget_handler(httpd_req_t *req)
+{
+    ESP_LOGW(TAG, "Effacement du reseau WiFi enregistre");
+
+    // Ecraser la config STA persistee par esp_wifi (NVS) avec une config vide.
+    wifi_config_t empty = {0};
+    esp_err_t ret = esp_wifi_set_config(WIFI_IF_STA, &empty);
+    if (ret != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Erase failed");
+        return ESP_FAIL;
+    }
+    esp_wifi_disconnect();
+
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(response, "success", true);
+    cJSON_AddStringToObject(response, "message",
+                            "Reseau oublie. Redemarrez la box : elle passera en point "
+                            "d'acces Medbox-XXXX pour etre reconfiguree.");
+
+    char *json_str = cJSON_PrintUnformatted(response);
+    cJSON_Delete(response);
+    if (json_str == NULL) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json_str, strlen(json_str));
+    free(json_str);
+    return ESP_OK;
+}
+
+// ============================================
+// GET /api/motor - Etat de la calibration moteur
+// ============================================
+static esp_err_t api_motor_get_handler(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "steps_per_slot", motor_get_steps_per_slot());
+    cJSON_AddNumberToObject(root, "default", MOTOR_STEPS_PER_SLOT_DEFAULT);
+    cJSON_AddNumberToObject(root, "min", MOTOR_STEPS_PER_SLOT_MIN);
+    cJSON_AddNumberToObject(root, "max", MOTOR_STEPS_PER_SLOT_MAX);
+    cJSON_AddBoolToObject(root, "busy", motor_test_running());
+
+    char *json_str = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (json_str == NULL) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json_str, strlen(json_str));
+    free(json_str);
+    return ESP_OK;
+}
+
+// ============================================
+// POST /api/motor/calibrate - Enregistre la valeur et fait un essai d'une case
+// Body : {"steps_per_slot": 145, "test": true}
+// ============================================
+static esp_err_t api_motor_calibrate_handler(httpd_req_t *req)
+{
+    char content[128];
+    int received = httpd_req_recv(req, content, sizeof(content) - 1);
+    if (received <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data");
+        return ESP_FAIL;
+    }
+    content[received] = '\0';
+
+    cJSON *root = cJSON_Parse(content);
+    if (root == NULL) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    cJSON *steps_json = cJSON_GetObjectItem(root, "steps_per_slot");
+    if (!cJSON_IsNumber(steps_json)) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "steps_per_slot required");
+        return ESP_FAIL;
+    }
+    int steps = steps_json->valueint;
+
+    // "test": false permet d'enregistrer sans faire tourner la roue.
+    cJSON *test_json = cJSON_GetObjectItem(root, "test");
+    bool do_test = !cJSON_IsBool(test_json) || cJSON_IsTrue(test_json);
+    cJSON_Delete(root);
+
+    // Refuser pendant un mouvement : changer la valeur a chaud fausserait l'essai.
+    // (esp_http_server n'expose pas de code 409, on le pose manuellement.)
+    if (do_test && motor_test_running()) {
+        const char *busy = "{\"success\":false,\"message\":\"Moteur deja en mouvement\"}";
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, busy, strlen(busy));
+        return ESP_OK;
+    }
+
+    bool saved = motor_set_steps_per_slot(steps);
+    if (!saved) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Value out of range or NVS write failed");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Calibration appliquee : %d micropas/case (essai=%d)", steps, do_test);
+    if (do_test) {
+        motor_dispense_once();
+    }
+
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(response, "success", true);
+    cJSON_AddNumberToObject(response, "steps_per_slot", motor_get_steps_per_slot());
+    cJSON_AddBoolToObject(response, "tested", do_test);
+    cJSON_AddStringToObject(response, "message",
+                            do_test ? "Valeur enregistree, essai d'une case en cours"
+                                    : "Valeur enregistree");
+
+    char *json_str = cJSON_PrintUnformatted(response);
+    cJSON_Delete(response);
+    if (json_str == NULL) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json_str, strlen(json_str));
+    free(json_str);
+    return ESP_OK;
+}
+
+// ============================================
 // Enregistrement des handlers API
 // ============================================
 esp_err_t web_api_register_handlers(httpd_handle_t server)
@@ -343,11 +476,32 @@ esp_err_t web_api_register_handlers(httpd_handle_t server)
         .handler = api_errors_handler,
     };
 
+    httpd_uri_t uri_wifi_forget = {
+        .uri = "/api/wifi/forget",
+        .method = HTTP_POST,
+        .handler = api_wifi_forget_handler,
+    };
+
+    httpd_uri_t uri_motor_get = {
+        .uri = "/api/motor",
+        .method = HTTP_GET,
+        .handler = api_motor_get_handler,
+    };
+
+    httpd_uri_t uri_motor_calibrate = {
+        .uri = "/api/motor/calibrate",
+        .method = HTTP_POST,
+        .handler = api_motor_calibrate_handler,
+    };
+
     httpd_register_uri_handler(server, &uri_status);
     httpd_register_uri_handler(server, &uri_wifi_scan);
     httpd_register_uri_handler(server, &uri_wifi_config_get);
     httpd_register_uri_handler(server, &uri_wifi_config_post);
     httpd_register_uri_handler(server, &uri_errors);
+    httpd_register_uri_handler(server, &uri_wifi_forget);
+    httpd_register_uri_handler(server, &uri_motor_get);
+    httpd_register_uri_handler(server, &uri_motor_calibrate);
 
     ESP_LOGI(TAG, "API endpoints enregistres");
     return ESP_OK;

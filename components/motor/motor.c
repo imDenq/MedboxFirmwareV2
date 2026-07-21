@@ -9,8 +9,13 @@
 #include "esp_rom_sys.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "nvs.h"
 
 static const char *TAG = "motor";
+
+// Namespace / cle NVS pour la calibration (partition "nvs" par defaut, chiffree).
+#define MOTOR_NVS_NAMESPACE "motor_cfg"
+#define MOTOR_NVS_KEY_STEPS "steps_slot"
 
 // --- Pinout (confirme schema U4 ESP32-DevKitC) ---
 #define MOT_DIR GPIO_NUM_32
@@ -26,9 +31,11 @@ static const char *TAG = "motor";
 #define MOT_DISABLE_LEVEL 1  // HIGH = moteur coupe (repos)
 #define MOT_DIR_DISPENSE 1   // sens de distribution (a caler si besoin)
 
-// --- Calibration mecanique — A AJUSTER sur le vrai materiel ---
+// --- Calibration mecanique ---
 // 3200 micropas/tour (moteur 200 pas * 1/16) / 22 cases ~= 145 micropas/case.
-#define STEPS_PER_SLOT 145
+// Valeur ajustable depuis l'interface web et persistee en NVS (cf. motor_set_steps_per_slot).
+static volatile int s_steps_per_slot = MOTOR_STEPS_PER_SLOT_DEFAULT;
+
 #define DISTRIB_PER_DAY 3
 
 // Rampe de vitesse : delai (us) par demi-pas. Lent au depart/arrivee (couple),
@@ -69,6 +76,61 @@ static void buzzer_double_beep(void)
     buzzer_tone(2700);  // "aigu" (proche resonance -> fort)
     vTaskDelay(pdMS_TO_TICKS(150));
     buzzer_off();
+}
+
+// --- Calibration : persistance NVS ---
+
+// Recharge la valeur calibree depuis la NVS. Silencieux si absente (1er boot).
+static void calib_load(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(MOTOR_NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) {
+        ESP_LOGI(TAG, "Pas de calibration en NVS, defaut %d micropas/case",
+                 MOTOR_STEPS_PER_SLOT_DEFAULT);
+        return;
+    }
+    int32_t stored = 0;
+    if (nvs_get_i32(h, MOTOR_NVS_KEY_STEPS, &stored) == ESP_OK && stored >= MOTOR_STEPS_PER_SLOT_MIN
+        && stored <= MOTOR_STEPS_PER_SLOT_MAX) {
+        s_steps_per_slot = (int)stored;
+        ESP_LOGI(TAG, "Calibration rechargee : %d micropas/case", s_steps_per_slot);
+    }
+    nvs_close(h);
+}
+
+int motor_get_steps_per_slot(void)
+{
+    return s_steps_per_slot;
+}
+
+bool motor_set_steps_per_slot(int steps)
+{
+    if (steps < MOTOR_STEPS_PER_SLOT_MIN || steps > MOTOR_STEPS_PER_SLOT_MAX) {
+        ESP_LOGW(TAG, "Calibration refusee : %d hors bornes [%d..%d]", steps,
+                 MOTOR_STEPS_PER_SLOT_MIN, MOTOR_STEPS_PER_SLOT_MAX);
+        return false;
+    }
+    s_steps_per_slot = steps;
+
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(MOTOR_NVS_NAMESPACE, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS open echoue (%s) : valeur appliquee mais NON persistee",
+                 esp_err_to_name(err));
+        return false;
+    }
+    err = nvs_set_i32(h, MOTOR_NVS_KEY_STEPS, (int32_t)steps);
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS write echoue (%s)", esp_err_to_name(err));
+        return false;
+    }
+    ESP_LOGI(TAG, "Calibration enregistree : %d micropas/case (persistante au reboot)", steps);
+    return true;
 }
 
 // Delai du pas i sur `total` : profil triangulaire (lent -> rapide -> lent).
@@ -127,7 +189,11 @@ void motor_init(void)
     // Bip de confirmation au boot (permet de valider le buzzer sans lancer un test)
     buzzer_double_beep();
 
-    ESP_LOGI(TAG, "Moteur initialise (desactive), microstepping 1/16");
+    // Calibration persistee (si l'utilisateur en a defini une via l'interface web)
+    calib_load();
+
+    ESP_LOGI(TAG, "Moteur initialise (desactive), microstepping 1/16, %d micropas/case",
+             s_steps_per_slot);
 }
 
 // Avance d'une case : active le moteur, chirp, rampe de pas, puis DESACTIVE.
@@ -142,8 +208,11 @@ static void advance_one_slot(void)
     vTaskDelay(pdMS_TO_TICKS(40));
     buzzer_off();
 
-    for (int i = 0; i < STEPS_PER_SLOT; i++) {
-        int d = ramp_delay(i, STEPS_PER_SLOT);
+    // Lecture unique : la valeur peut etre changee a chaud depuis l'interface web,
+    // on fige celle du mouvement en cours pour garder une rampe coherente.
+    const int steps = s_steps_per_slot;
+    for (int i = 0; i < steps; i++) {
+        int d = ramp_delay(i, steps);
         gpio_set_level(MOT_STEP, 1);
         esp_rom_delay_us(d);
         gpio_set_level(MOT_STEP, 0);
@@ -197,6 +266,36 @@ void motor_start_test(int days)
         pdPASS) {
         s_test_running = false;
         ESP_LOGE(TAG, "Impossible de lancer la tache de test");
+    }
+}
+
+// Une seule avance d'une case (une "prise"), en tache de fond.
+static void motor_single_task(void *arg)
+{
+    (void)arg;
+    ESP_LOGI(TAG, "Distribution d'une prise (%d micropas)", s_steps_per_slot);
+
+    buzzer_double_beep();
+
+    gpio_set_level(LED_MEDIC, 1);
+    advance_one_slot();
+    gpio_set_level(LED_MEDIC, 0);
+
+    ESP_LOGI(TAG, "Prise distribuee");
+    s_test_running = false;
+    vTaskDelete(NULL);
+}
+
+void motor_dispense_once(void)
+{
+    if (s_test_running) {
+        ESP_LOGW(TAG, "Mouvement deja en cours");
+        return;
+    }
+    s_test_running = true;
+    if (xTaskCreate(motor_single_task, "motor_once", 4096, NULL, 4, NULL) != pdPASS) {
+        s_test_running = false;
+        ESP_LOGE(TAG, "Impossible de lancer la tache de distribution");
     }
 }
 

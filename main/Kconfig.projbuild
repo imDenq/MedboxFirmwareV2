@@ -2,16 +2,19 @@ menu "Medbox Configuration"
 
     menu "WiFi Configuration"
         config MEDBOX_WIFI_SSID
-            string "WiFi SSID"
-            default "CPL_DENQ"
+            string "WiFi SSID de secours"
+            default ""
             help
-                SSID du réseau WiFi.
+                SSID de secours, utilise UNIQUEMENT si aucun reseau n'a encore
+                ete enregistre depuis l'interface web. Laisser vide (recommande) :
+                la box demarre alors directement en point d'acces Medbox-XXXX
+                pour etre configuree depuis un telephone.
 
         config MEDBOX_WIFI_PASSWORD
-            string "WiFi Password"
-            default "AZoote51420&"
+            string "WiFi Password de secours"
+            default ""
             help
-                Mot de passe du réseau WiFi.
+                Mot de passe associe au SSID de secours. Laisser vide.
     endmenu
 
     menu "MQTT Configuration"
